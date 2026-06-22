@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  postgres_db:
+    image: postgres:15-alpine
+    container_name: labor_postgres_db
+    restart: always
+    environment:
+      POSTGRES_USER: labor_admin
+      POSTGRES_PASSWORD: StrongLocalPassword2026
+      POSTGRES_DB: labor_management_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: labor_pgadmin
+    restart: always
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@labor.local
+      PGADMIN_DEFAULT_PASSWORD: PgAdminPassword2026
+    ports:
+      - "8080:80" # Maps port 8080 of your server host to port 80 of the container. Safe even if port 80 is busy.
+    depends_on:
+      - postgres_db
+
+volumes:
+  postgres_data:
