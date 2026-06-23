@@ -1,30 +1,30 @@
-version: '3.8'
-
 services:
-  postgres_db:
-    image: postgres:15-alpine
-    container_name: labor_postgres_db
+  mariadb_db:
+    image: mariadb:10.11
+    container_name: labor_mariadb_db
     restart: always
     environment:
-      POSTGRES_USER: labor_admin
-      POSTGRES_PASSWORD: StrongLocalPassword2026
-      POSTGRES_DB: labor_management_db
+      MYSQL_ROOT_PASSWORD: StrongLocalRootPassword2026
+      MYSQL_USER: labor_admin
+      MYSQL_PASSWORD: StrongLocalPassword2026
+      MYSQL_DATABASE: labor_management_db
     ports:
-      - "5432:5432"
+      - "3306:3306"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - mariadb_data:/var/lib/mysql
 
-  pgadmin:
-    image: dpage/pgadmin4
-    container_name: labor_pgadmin
+  phpmyadmin:
+    image: phpmyadmin:latest
+    container_name: labor_phpmyadmin
     restart: always
     environment:
-      PGADMIN_DEFAULT_EMAIL: admin@labor.local
-      PGADMIN_DEFAULT_PASSWORD: PgAdminPassword2026
+      PMA_HOST: mariadb_db
+      PMA_PORT: 3306
     ports:
-      - "8080:80" # Maps port 8080 of your server host to port 80 of the container. Safe even if port 80 is busy.
+      - "8085:80" # تم استخدام البورت 8085 لكي تتجنب بورت 80 المحجوز وبورت 8080 لتفادي أي مشاكل أو تعارضات
     depends_on:
-      - postgres_db
+      - mariadb_db
 
 volumes:
-  postgres_data:
+  mariadb_data:
+
