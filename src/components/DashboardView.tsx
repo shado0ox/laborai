@@ -13,6 +13,7 @@ interface DashboardViewProps {
   branches: string[];
   onClearLogs: () => void;
   activeRole: string;
+  logoBase64?: string;
 }
 
 export default function DashboardView({
@@ -22,7 +23,8 @@ export default function DashboardView({
   logs,
   branches,
   onClearLogs,
-  activeRole
+  activeRole,
+  logoBase64
 }: DashboardViewProps) {
   const [logFilter, setLogFilter] = useState<string>('');
 
@@ -116,45 +118,42 @@ export default function DashboardView({
   };
 
   return (
-    <div className="space-y-6">
-      {/* Top Welcome Title Grid */}
-      <div className="bg-white rounded-2xl p-6 border border-slate-200/80 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-1.5 mb-1 text-slate-500 text-xs font-bold">
-            <Sparkles className="w-4 h-4 text-primary-light" />
-            <span>لوحة المؤشرات والتحليلات البيانية المعززة</span>
+    <div className="space-y-4">
+      {/* Streamlined Welcome Title Bar */}
+      <div className="bg-slate-50/80 rounded-xl p-3 border border-slate-200/50 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-right">
+        <div className="flex items-center gap-3">
+          {logoBase64 ? (
+            <div className="w-10 h-10 rounded-lg bg-white border border-slate-200 p-1 flex items-center justify-center overflow-hidden shrink-0 shadow-2xs">
+              <img src={logoBase64} alt="شعار المؤسسة المعتمد" className="w-full h-full object-contain" />
+            </div>
+          ) : (
+            <div className="w-10 h-10 rounded-lg bg-slate-100 border border-slate-200 flex items-center justify-center shrink-0">
+              <Sparkles className="w-5 h-5 text-[#0d5189]" />
+            </div>
+          )}
+          <div>
+            <div className="flex items-center gap-1.5 text-slate-500 text-[10px] font-bold">
+              <span>لوحة المؤشرات والمعلومات التحليلية الفورية</span>
+            </div>
+            <h2 className="text-sm font-black text-[#0b2844] mt-0.5">مرحباً، {activeRole === 'admin' ? 'المدير العام للمنظومة' : 'المشرف المسؤول عن الفرع'}</h2>
           </div>
-          <h2 className="text-xl font-black text-slate-900">مرحباً بك في نظام إدارة ومتابعة العمالة</h2>
-          <p className="text-xs text-slate-500 mt-1">تجد في هذه الواجهة تقريراً شاملاً يدمج الحركات المسجلة وتواريخ الإقامات الهجرية المتبقية.</p>
         </div>
-        <div className="shrink-0 flex items-center gap-2 text-xs bg-primary/5 border border-primary/10 rounded-xl py-2 px-3.5">
-          <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping"></span>
-          <span className="text-slate-700 font-bold">حالة تدفق البيانات:</span>
-          <span className="font-mono bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded font-black text-[10px]">مستقرة محلياً</span>
+        <div className="shrink-0 flex items-center gap-1.5 text-[10px] bg-white border border-slate-200/80 shadow-xs rounded-lg py-1 px-2">
+          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
+          <span className="text-slate-600 font-bold">حالة تدفق البيانات:</span>
+          <span className="font-mono bg-emerald-50 text-emerald-800 px-1 py-0.2 rounded font-bold text-[9px]">نشط تلقائياً</span>
         </div>
       </div>
 
-      {/* Primary KPI Grid Dashboard */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {kpis.slice(0, 4).map((k, ind) => (
-          <div key={ind} className={`p-4 rounded-2xl shadow-sm border border-slate-100 ${k.color} flex flex-col justify-between`}>
+      {/* High-Density KPI Control Hub */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
+        {kpis.map((k, ind) => (
+          <div key={ind} className={`p-3 rounded-xl border border-slate-200/70 shadow-[0_2px_8px_-3px_rgba(0,0,0,0.03)] ${k.color} flex flex-col justify-between transition-all duration-300 hover:-translate-y-0.5 hover:shadow-2xs`}>
             <div>
-              <span className="text-slate-500 text-xs font-bold block mb-1">{k.label}</span>
-              <span className="text-2xl md:text-3xl font-black block leading-none my-1 tracking-tight">{k.value}</span>
+              <span className="text-[10px] text-slate-500 block truncate font-semibold">{k.label}</span>
+              <span className="text-base md:text-lg font-black block leading-none mt-1 tracking-tight">{k.value}</span>
             </div>
-            <span className="text-[10px] text-slate-400 block mt-2 font-medium">{k.sub}</span>
-          </div>
-        ))}
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {kpis.slice(4).map((k, ind) => (
-          <div key={ind} className={`p-4 rounded-2xl shadow-sm border border-slate-100 ${k.color} flex flex-col justify-between`}>
-            <div>
-              <span className="text-slate-500 text-xs font-bold block mb-1">{k.label}</span>
-              <span className="text-2xl font-black block leading-none my-1 tracking-tight">{k.value}</span>
-            </div>
-            <span className="text-[10px] text-slate-400 block mt-2 font-medium">{k.sub}</span>
+            <span className="text-[9px] text-slate-400 block mt-1.5 font-normal truncate">{k.sub}</span>
           </div>
         ))}
       </div>

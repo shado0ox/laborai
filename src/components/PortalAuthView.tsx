@@ -206,14 +206,6 @@ export default function PortalAuthView({
             </button>
 
             {/* Quick Demo Accounts Hints */}
-            <div className="border-t border-slate-900 pt-3 select-none">
-              <span className="text-[10px] text-slate-500 font-bold block mb-1">💡 للتجربة السريعة كمدير نظام أو مشرف فرع:</span>
-              <ul className="text-[9px] text-slate-400 font-medium space-y-1">
-                <li>• حساب المدير العام: <strong>shady.nasif@gmail.com</strong> / كلمة المرور: <strong>admin</strong></li>
-                <li>• مشرف فرع جدة: <strong>jeddah.branch@company.com</strong> / كلمة المرور: <strong>123</strong></li>
-                <li>• حساب مشاهد: <strong>viewer@company.com</strong> / كلمة المرور: <strong>123</strong></li>
-              </ul>
-            </div>
 
           </form>
         )}

@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
+import * as XLSX from 'xlsx';
 import { Employee, Payment, PricingSettings, UserProfile } from '../types';
 import { g2h, g2hObj, h2g } from '../utils/hijri';
 import { 
   Plus, Search, Sliders, Trash2, ShieldAlert, CheckCircle2,
-  Calendar, FileText, Smartphone, MessageSquare, RefreshCw, X, Coins, HelpCircle
+  Calendar, FileText, Smartphone, MessageSquare, RefreshCw, X, Coins, HelpCircle,
+  Upload
 } from 'lucide-react';
 
 const AR_HIJRI_MONTHS = [
@@ -107,6 +109,8 @@ export default function EmployeeListView({
 
   // Form states: Update Expiry Date
   const [newExpDateRaw, setNewExpDateRaw] = useState('');
+  const [renewGregMode, setRenewGregMode] = useState(true);
+  const [renewExpiryHijri, setRenewExpiryHijri] = useState('');
 
   // Form states: Register Kafala order
   const [newKafalaOrderMonths, setNewKafalaOrderMonths] = useState(1);
@@ -265,7 +269,9 @@ export default function EmployeeListView({
 
   const handleOpenExpiry = (emp: Employee) => {
     setSelectedEmp(emp);
-    setNewExpDateRaw(emp.iqamaExpiry);
+    setNewExpDateRaw(emp.iqamaExpiry || '');
+    setRenewExpiryHijri(emp.iqamaExpiry ? g2h(emp.iqamaExpiry) : '');
+    setRenewGregMode(true);
     setIsExpiryOpen(true);
   };
 
@@ -472,8 +478,16 @@ export default function EmployeeListView({
   };
 
   const submitUpdateExpiry = () => {
-    if (!selectedEmp || !newExpDateRaw) return;
-    onUpdateEmployeeExpiry(selectedEmp.iqamaNo, newExpDateRaw);
+    if (!selectedEmp) return;
+    let finalExpiry = newExpDateRaw;
+    if (!renewGregMode && renewExpiryHijri) {
+      finalExpiry = h2g(renewExpiryHijri);
+    }
+    if (!finalExpiry) {
+      alert('الرجاء إدخال تاريخ انتهاء إقامة صحيح');
+      return;
+    }
+    onUpdateEmployeeExpiry(selectedEmp.iqamaNo, finalExpiry);
     setIsExpiryOpen(false);
   };
 
@@ -506,117 +520,269 @@ export default function EmployeeListView({
     document.body.removeChild(link);
   };
 
+  const handleExcelImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const bstr = evt.target?.result;
+        const wb = XLSX.read(bstr, { type: 'binary' });
+        const wsname = wb.SheetNames[0];
+        const ws = wb.Sheets[wsname];
+        const data = XLSX.utils.sheet_to_json(ws, { header: 1 }) as any[][];
+
+        if (data.length <= 1) {
+          alert('الملف فارغ أو لا يحتوي على صفوف بيانات.');
+          return;
+        }
+
+        const headers = data[0].map(h => String(h || '').trim());
+        const findColIdx = (names: string[]) => {
+          return headers.findIndex(h => names.some(n => h.includes(n) || n.includes(h)));
+        };
+
+        const nameIdx = findColIdx(['الاسم', 'اسم الموظف', 'العامل', 'الرباعي', 'Name', 'employee_name']);
+        const iqamaIdx = findColIdx(['الإقامة', 'رقم الإقامة', 'الهوية', 'Iqama', 'national_id', 'iqama_no']);
+        const empIdIdx = findColIdx(['رقم الموظف', 'الرقم الوظيفي', 'رقم تعريف الموظف', 'كود', 'Employee ID', 'employee_id']);
+        const expiryIdx = findColIdx(['تاريخ الانتهاء', 'انتهاء الإقامة', 'انتهاء الاقامه', 'الانتهاء', 'expiry', 'iqama_expiry']);
+        const mobileIdx = findColIdx(['الجوال', 'رقم الجوال', 'هاتف', 'جوال', 'Mobile', 'phone']);
+        const branchIdx = findColIdx(['الفرع', 'الفرع التابع', 'فرع', 'Branch', 'branch_name']);
+        const iqamaBalIdx = findColIdx(['رصيد الإقامة', 'الرصيد', 'رصيد الاقامة', 'رصيد', 'iqama_balance', 'iqama_bal']);
+        const kafalaCountIdx = findColIdx(['أشهر الكفالة', 'عدد الكفالات', 'كفالة', 'كفالات', 'kafala_count', 'kafala']);
+        const otherDebtIdx = findColIdx(['ديون أخرى', 'ديون اخرى', 'مديونية أخرى', 'other_debt']);
+        const otherDebtDescIdx = findColIdx(['تفاصيل الديون', 'تفاصيل الديون الأخرى', 'وصف الديون', 'other_debt_desc']);
+        const notesIdx = findColIdx(['ملاحظات', 'ملاحظه', 'Notes', 'notes']);
+
+        if (nameIdx === -1 || iqamaIdx === -1) {
+          alert('خطأ: لم يتم العثور على أعمدة أساسية ("الاسم الرباعي" و "رقم الإقامة") في الملف المرفوع. يرجى التأكد من تسمية الأعمدة بشكل واضح.');
+          return;
+        }
+
+        let importCount = 0;
+        let skipCount = 0;
+
+        for (let i = 1; i < data.length; i++) {
+          const row = data[i];
+          if (!row || row.length === 0) continue;
+
+          const rawIqama = String(row[iqamaIdx] || '').trim();
+          const name = String(row[nameIdx] || '').trim();
+
+          if (!rawIqama || !name) {
+            continue;
+          }
+
+          // Check if it already exists
+          if (employees.some(emp => emp.iqamaNo === rawIqama)) {
+            skipCount++;
+            continue;
+          }
+
+          // Parse Expiry Date
+          let rawExpiry = expiryIdx !== -1 ? String(row[expiryIdx] || '').trim() : '';
+          let calculatedExpiry = '';
+
+          if (rawExpiry) {
+            if (!isNaN(Number(rawExpiry)) && Number(rawExpiry) > 40000) {
+              const excelDate = new Date((Number(rawExpiry) - 25569) * 86400 * 1000);
+              calculatedExpiry = excelDate.toISOString().slice(0, 10);
+            } else {
+              if (rawExpiry.includes('/') || rawExpiry.includes('-')) {
+                const parts = rawExpiry.split(/[\/\-]/);
+                const firstPart = parseInt(parts[0], 10);
+                if (firstPart > 1300 && firstPart < 1500) {
+                  calculatedExpiry = h2g(rawExpiry);
+                } else {
+                  if (firstPart < 100) {
+                    const d = new Date(rawExpiry);
+                    if (!isNaN(d.getTime())) {
+                      calculatedExpiry = d.toISOString().slice(0, 10);
+                    }
+                  } else {
+                    calculatedExpiry = rawExpiry;
+                  }
+                }
+              }
+            }
+          }
+
+          if (!calculatedExpiry) {
+            const future = new Date();
+            future.setFullYear(future.getFullYear() + 1);
+            calculatedExpiry = future.toISOString().slice(0, 10);
+          }
+
+          const empId = empIdIdx !== -1 && row[empIdIdx] ? String(row[empIdIdx]).trim() : undefined;
+          const mobile = mobileIdx !== -1 && row[mobileIdx] ? String(row[mobileIdx]).trim() : '-';
+          const branch = branchIdx !== -1 && row[branchIdx] ? String(row[branchIdx]).trim() : (branches[0] || 'فرع الرياض الأساسي');
+          const iqamaBalance = iqamaBalIdx !== -1 ? Number(row[iqamaBalIdx]) || 0 : 0;
+          const kafalaCount = kafalaCountIdx !== -1 ? Number(row[kafalaCountIdx]) || 0 : 0;
+          const otherDebt = otherDebtIdx !== -1 ? Number(row[otherDebtIdx]) || 0 : 0;
+          const otherDebtDesc = otherDebtDescIdx !== -1 && row[otherDebtDescIdx] ? String(row[otherDebtDescIdx]).trim() : '';
+          const notes = notesIdx !== -1 && row[notesIdx] ? String(row[notesIdx]).trim() : 'لا توجد ملاحظات';
+
+          const newEmp: Employee = {
+            iqamaNo: rawIqama,
+            name: name,
+            employeeId: empId,
+            iqamaExpiry: calculatedExpiry,
+            mobile: mobile,
+            branch: branch,
+            iqamaBalance: iqamaBalance,
+            kafalaCount: kafalaCount,
+            otherDebt: otherDebt,
+            otherDebtDesc: otherDebtDesc,
+            notes: notes,
+            status: 'active',
+            addedDate: new Date().toISOString(),
+            kafalaStartMonth: 'شعبان',
+            kafalaStartYear: '1447'
+          };
+
+          onAddEmployee(newEmp);
+          importCount++;
+        }
+
+        alert(`✓ تم استيراد عدد (${importCount}) موظف بنجاح من ملف الإكسيل. تم تخطي عدد (${skipCount}) موظف مكرر أو غير مكتمل البيانات.`);
+        e.target.value = '';
+      } catch (error) {
+        console.error(error);
+        alert('حدث خطأ أثناء قراءة ملف الإكسيل، يرجى التأكد من صحة تنسيق الملف وامتداده (.xlsx, .xls).');
+      }
+    };
+    reader.readAsBinaryString(file);
+  };
+
   return (
     <div className="space-y-4">
       
-      {/* Header controls and Search view */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm space-y-4">
-        
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-          <div className="flex items-center gap-1.5">
-            <Sliders className="w-5 h-5 text-primary-light" />
-            <h3 className="text-sm font-black text-slate-800">تصفية وبحث العمالة</h3>
+      {/* Header controls and Search view: Ultra Condensed Single-Row Hub */}
+      <div className="bg-slate-50 border border-slate-200 p-1.5 rounded-xl shadow-2xs">
+        <div className="flex flex-row flex-wrap items-center gap-1.5 text-xs font-bold">
+          
+          {/* Quick Info icon & title */}
+          <div className="flex items-center gap-1 text-slate-700 font-extrabold shrink-0 bg-white px-2 py-1 rounded-lg border border-slate-200">
+            <Sliders className="w-3.5 h-3.5 text-primary-light" />
+            <span className="text-[10px]">تصفية العمالة</span>
           </div>
 
-          <div className="flex gap-2 flex-wrap">
-            {!isReadOnly && (
-              <button 
-                onClick={() => setIsAddOpen(true)}
-                className="btn btn-primary text-xs cursor-pointer"
-              >
-                <Plus className="w-4 h-4 ml-1" />
-                <span>إضافة موظف عمالة جديد</span>
-              </button>
-            )}
-            <button 
-              onClick={triggerExcelExport}
-              className="btn btn-green text-xs"
-            >
-              <span>تصدير سريع Excel (مع الأرصدة)</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Dynamic Filters form */}
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs font-bold">
-          <div className="relative">
+          {/* Combined Search/Filter Inputs */}
+          <div className="flex-1 min-w-[150px] relative">
             <input 
               type="text"
               value={filterSearch}
               onChange={(e) => setFilterSearch(e.target.value)}
               placeholder="البحث بالاسم، الإقامة، الجوال..."
-              className="w-full pl-8 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-none focus:ring-1 focus:ring-primary-light text-slate-800"
+              className="w-full pl-7 pr-2.5 py-1 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-primary-light text-slate-800 text-[11px] h-[28px]"
             />
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <Search className="w-3 h-3 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
           </div>
 
-          <div>
+          <div className="shrink-0 min-w-[100px]">
             <select 
               value={filterBranch}
               onChange={(e) => setFilterBranch(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 focus:outline-none text-slate-800"
+              className="w-full bg-white border border-slate-200 rounded-lg py-0.5 px-1.5 focus:outline-none text-slate-800 text-[11px] h-[28px]"
             >
-              <option value="">كل الفروع الجغرافية</option>
+              <option value="">كل الفروع</option>
               {branches.map(b => (
                 <option key={b} value={b}>{b}</option>
               ))}
             </select>
           </div>
 
-          <div>
+          <div className="shrink-0 min-w-[100px]">
             <select 
               value={filterExpiry}
               onChange={(e) => setFilterExpiry(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 focus:outline-none text-slate-800"
+              className="w-full bg-white border border-slate-200 rounded-lg py-0.5 px-1.5 focus:outline-none text-slate-800 text-[11px] h-[28px]"
             >
-              <option value="">تاريخ إقامة الإنتهاء</option>
-              <option value="30">تنتهي قريباً (خلال 30 يوم)</option>
-              <option value="60">تنتهي قريباً (خلال 60 يوم)</option>
+              <option value="">حالة الإنتهاء</option>
+              <option value="30">ينتهي قريباً (30 يوم)</option>
+              <option value="60">ينتهي قريباً (60 يوم)</option>
             </select>
           </div>
+
+          {/* Quick Actions (Add/Import/Export) directly adjacent to inputs */}
+          <div className="flex items-center gap-1 flex-wrap ml-auto">
+            {!isReadOnly && (
+              <>
+                <button 
+                  onClick={() => setIsAddOpen(true)}
+                  className="btn btn-primary text-[10px] cursor-pointer flex items-center gap-0.5 px-2 py-1 rounded-lg font-black h-[28px]"
+                >
+                  <Plus className="w-3 h-3" />
+                  <span>إضافة موظف 👤</span>
+                </button>
+                <input 
+                  type="file" 
+                  id="excelImportFile" 
+                  accept=".xlsx, .xls" 
+                  onChange={handleExcelImport} 
+                  className="hidden" 
+                />
+                <button 
+                  onClick={() => document.getElementById('excelImportFile')?.click()}
+                  className="bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 text-[10px] flex items-center gap-0.5 cursor-pointer font-bold px-2 py-1 rounded-lg h-[28px]"
+                >
+                  <Upload className="w-3 h-3" />
+                  <span>استيراد 📥</span>
+                </button>
+              </>
+            )}
+            <button 
+              onClick={triggerExcelExport}
+              className="btn btn-green text-[10px] flex items-center gap-0.5 px-2 py-1 rounded-lg h-[28px]"
+            >
+              <span>تصدير 📤</span>
+            </button>
+          </div>
+
         </div>
       </div>
 
       {/* Employees Table view */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+      <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="overflow-x-auto max-w-full">
           <table className="w-full text-right border-collapse">
-            <thead className="bg-slate-50 text-slate-700 text-xs border-b border-slate-200">
+            <thead className="bg-[#0b2844] text-white text-[11px] border-b border-slate-200">
               <tr>
-                <th className="px-4 py-3.5 text-center font-bold">#</th>
-                <th className="px-4 py-3.5 font-bold">الاسم الرباعي للعامل</th>
-                <th className="px-4 py-3.5 text-center font-bold text-slate-800">رقم التعريف (الكود)</th>
-                <th className="px-4 py-3.5 text-center font-bold">رقم الإقامة</th>
-                <th className="px-4 py-3.5 text-center font-bold">الفرع التابع</th>
-                <th className="px-4 py-3.5 text-center font-bold">تاريخ الانتهاء ميلادي</th>
-                <th className="px-4 py-3.5 text-center font-bold">الانتهاء هجري</th>
-                <th className="px-4 py-3.5 text-center font-bold">أيام متبقية</th>
-                <th className="px-4 py-3.5 text-center font-bold">الهاتف</th>
-                <th className="px-4 py-3.5 text-center font-bold text-red-600">المطلوب</th>
-                <th className="px-4 py-3.5 text-center font-bold text-emerald-600">المسدد</th>
-                <th className="px-4 py-3.5 text-center font-bold">الرصيد المتبقي</th>
-                <th className="px-4 py-3.5 text-center font-bold">الإجراءات والقيود</th>
+                <th className="px-2 py-2 text-center font-extrabold">#</th>
+                <th className="px-2 py-2 font-extrabold text-right">الاسم الرباعي للعامل</th>
+                <th className="px-2 py-2 text-center font-extrabold">رقم التعريف (الكود)</th>
+                <th className="px-2 py-2 text-center font-extrabold">رقم الإقامة</th>
+                <th className="px-2 py-2 text-center font-extrabold">الفرع</th>
+                <th className="px-2 py-2 text-center font-extrabold">تاريخ الانتهاء ميلادي</th>
+                <th className="px-2 py-2 text-center font-extrabold">الانتهاء هجري</th>
+                <th className="px-2 py-2 text-center font-extrabold">أيام متبقية</th>
+                <th className="px-2 py-2 text-center font-extrabold">الهاتف</th>
+                <th className="px-2 py-2 text-center font-extrabold">المطلوب</th>
+                <th className="px-2 py-2 text-center font-extrabold">المسدد</th>
+                <th className="px-2 py-2 text-center font-extrabold">الرصيد المتبقي</th>
+                <th className="px-2 py-2 text-center font-extrabold">الإجراءات والقيود</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100 text-xs">
+            <tbody className="divide-y divide-slate-100 text-[11px]">
               {finalEmployeesList.map((e, index) => {
                 const empPays = payments.filter(p => (p.iqamaNo === e.iqamaNo || p.name === e.name) && !p.type?.includes('مديونية'));
                 const totalPaid = empPays.reduce((sum, p) => sum + (p.amount || 0), 0);
                 const totalDue = (e.iqamaBalance || 0) + (e.kafalaCount * pricing.kafala) + (e.otherDebt || 0);
                 const balance = totalPaid - totalDue;
- 
+
                 // Expiry colors
                 let daysLeftVal: number | null = null;
                 if (e.iqamaExpiry) {
                   const expDate = new Date(e.iqamaExpiry + 'T00:00:00');
                   daysLeftVal = Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
                 }
- 
+
                 const iqamaHijri = g2h(e.iqamaExpiry);
- 
+
                 let badgeExpiryColor = 'bg-emerald-50 text-emerald-700';
                 let rowBgColor = '';
- 
+
                 if (daysLeftVal !== null) {
                   if (daysLeftVal < 0) {
                     badgeExpiryColor = 'bg-red-100 text-red-700 font-black animate-pulse';
@@ -629,24 +795,24 @@ export default function EmployeeListView({
                     rowBgColor = 'bg-amber-50/10';
                   }
                 }
- 
+
                 // WhatsApp messaging generators
                 const cleanMob = e.mobile?.replace(/\D/g, '');
                 const formattedMob = cleanMob ? (cleanMob.startsWith('0') ? '966' + cleanMob.slice(1) : (cleanMob.startsWith('966') ? cleanMob : '966' + cleanMob)) : '';
                 const waText = encodeURIComponent(`عزيزي الموظف ${e.name}، نود إشعارك بقرب انتهاء رخصة الإقامة كفيلك الحالي بتاريخ هجري ${iqamaHijri} الموافق ${e.iqamaExpiry}. كما يرجى مراجعة الإدارة لسداد المستحقات وقدرها ${Math.abs(balance).toLocaleString()} ريال لتفادي الغرامات المتراكمة.`);
- 
+
                 return (
                   <tr key={e.iqamaNo} className={`hover:bg-slate-50/60 transition-colors ${rowBgColor}`}>
-                    <td className="px-4 py-3 text-center text-slate-400 font-mono">{index + 1}</td>
-                    <td className="px-4 py-3 font-semibold text-slate-900">
+                    <td className="px-2 py-1.5 text-center text-slate-400 font-mono text-[10px]">{index + 1}</td>
+                    <td className="px-2 py-1.5 font-bold text-slate-900 text-right">
                       <div>{e.name}</div>
                       {e.kafalaStartMonth && (
-                        <div className="text-[10px] text-slate-400 font-semibold mt-0.5">
+                        <div className="text-[9px] text-slate-400 font-semibold mt-0.5">
                           بداية الكفالة: {e.kafalaStartMonth} {e.kafalaStartYear}
                         </div>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-center">
+                    <td className="px-2 py-1.5 text-center">
                       <input 
                         type="text" 
                         value={e.employeeId || ''} 
@@ -656,33 +822,33 @@ export default function EmployeeListView({
                           const val = event.target.value;
                           onUpdateEmployee({ ...e, employeeId: val });
                         }}
-                        className="w-24 text-center font-mono font-bold text-xs py-1 px-1.5 bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:outline-none focus:ring-1 focus:ring-primary-light text-slate-700 placeholder:text-slate-300 placeholder:font-normal"
+                        className="w-20 text-center font-mono font-bold text-[10px] py-0.5 px-1 bg-slate-50 border border-slate-200 rounded focus:bg-white focus:outline-none focus:ring-1 focus:ring-primary-light text-slate-700 placeholder:text-slate-300 placeholder:font-normal"
                       />
                     </td>
-                    <td className="px-4 py-3 text-center font-mono text-slate-600">{e.iqamaNo}</td>
-                    <td className="px-4 py-3 text-center">
-                      <span className="px-2 py-0.5 bg-slate-100 rounded-lg text-slate-600 font-bold">{e.branch}</span>
+                    <td className="px-2 py-1.5 text-center font-mono text-slate-600 font-semibold">{e.iqamaNo}</td>
+                    <td className="px-2 py-1.5 text-center">
+                      <span className="px-1.5 py-0.2 bg-slate-100 rounded text-slate-600 font-extrabold text-[10px]">{e.branch}</span>
                     </td>
-                    <td className="px-4 py-3 text-center font-mono text-slate-600">{e.iqamaExpiry}</td>
-                    <td className="px-4 py-3 text-center font-semibold text-primary">{iqamaHijri}</td>
-                    <td className="px-4 py-3 text-center">
-                      <span className={`px-2 py-1 rounded-full text-[10px] font-extrabold ${badgeExpiryColor}`}>
-                        {daysLeftVal !== null ? (daysLeftVal < 0 ? `منتهية ${Math.abs(daysLeftVal)} يوم` : `${daysLeftVal} يوم متبقي`) : '-'}
+                    <td className="px-2 py-1.5 text-center font-mono text-slate-600">{e.iqamaExpiry}</td>
+                    <td className="px-2 py-1.5 text-center font-extrabold text-primary">{iqamaHijri}</td>
+                    <td className="px-2 py-1.5 text-center">
+                      <span className={`px-1.5 py-0.5 rounded-md text-[9px] font-extrabold ${badgeExpiryColor}`}>
+                        {daysLeftVal !== null ? (daysLeftVal < 0 ? `منتهية ${Math.abs(daysLeftVal)} يوم` : `${daysLeftVal} يوم`) : '-'}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-center font-mono">{e.mobile || 'غير مسجل'}</td>
-                    <td className="px-4 py-3 text-center font-bold text-red-600">{totalDue.toLocaleString()}</td>
-                    <td className="px-4 py-3 text-center font-bold text-emerald-600">{totalPaid.toLocaleString()}</td>
-                    <td className="px-4 py-3 text-center">
-                      <span className={`px-2 py-0.5 rounded-full font-black ${balance < 0 ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'}`}>
+                    <td className="px-2 py-1.5 text-center font-mono text-[10px]">{e.mobile || 'غير مسجل'}</td>
+                    <td className="px-2 py-1.5 text-center font-black text-red-600">{totalDue.toLocaleString()}</td>
+                    <td className="px-2 py-1.5 text-center font-black text-emerald-600">{totalPaid.toLocaleString()}</td>
+                    <td className="px-2 py-1.5 text-center">
+                      <span className={`px-1.5 py-0.2 rounded font-black text-[10px] ${balance < 0 ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'}`}>
                         {balance.toLocaleString()} {balance < 0 ? 'مستحق' : 'فائض'}
                       </span>
                     </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center justify-center gap-1.5 flex-wrap min-w-[210px]">
+                    <td className="px-2 py-1.5">
+                      <div className="flex items-center justify-center gap-1 flex-wrap min-w-[200px]">
                         <button 
                           onClick={() => onShowStatement(e)}
-                          className="px-2 py-1 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-lg font-bold transition-all cursor-pointer"
+                          className="px-1.5 py-0.5 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded text-[10px] font-bold transition-all cursor-pointer"
                         >
                           📋 كشف
                         </button>
@@ -691,32 +857,32 @@ export default function EmployeeListView({
                           <>
                              <button 
                               onClick={() => handleOpenPay(e)}
-                              className="px-2 py-1 bg-emerald-100 text-emerald-850 hover:bg-emerald-200 rounded-lg font-bold transition-all cursor-pointer"
+                              className="px-1.5 py-0.5 bg-emerald-100 text-emerald-850 hover:bg-emerald-200 rounded text-[10px] font-bold transition-all cursor-pointer"
                             >
                               💵 دفعة
                             </button>
-                            <button 
+                             <button 
                               onClick={() => handleOpenDebt(e)}
-                              className="px-2 py-1 bg-rose-100 text-rose-850 hover:bg-rose-200 rounded-lg font-bold transition-all cursor-pointer"
+                              className="px-1.5 py-0.5 bg-rose-100 text-rose-850 hover:bg-rose-200 rounded text-[10px] font-bold transition-all cursor-pointer"
                             >
                               ⚖️ مديونية
                             </button>
-                            <button 
+                             <button 
                               onClick={() => handleOpenOpening(e)}
-                              className="px-2 py-1 bg-amber-100 text-amber-900 hover:bg-amber-150 rounded-lg font-bold transition-all cursor-pointer"
+                              className="px-1.5 py-0.5 bg-amber-100 text-amber-900 hover:bg-amber-150 rounded text-[10px] font-bold transition-all cursor-pointer"
                               title="تعديل وتحديث الرصيد الافتتاحي المستحق"
                             >
-                              💳 رصيد افتتاحي
+                              💳 افتتاح
                             </button>
                             <button 
                               onClick={() => handleOpenExpiry(e)}
-                              className="px-2 py-1 bg-sky-100 text-sky-850 hover:bg-sky-200 rounded-lg font-bold transition-all cursor-pointer"
+                              className="px-1.5 py-0.5 bg-sky-100 text-sky-850 hover:bg-sky-200 rounded text-[10px] font-bold transition-all cursor-pointer"
                             >
                               📅 تاريخ
                             </button>
                             <button 
                               onClick={() => handleOpenArchive(e)}
-                              className="px-2 py-1 bg-slate-200 text-slate-800 hover:bg-slate-350 rounded-lg font-bold transition-all cursor-pointer"
+                              className="px-1.5 py-0.5 bg-slate-200 text-slate-800 hover:bg-slate-350 rounded text-[10px] font-bold transition-all cursor-pointer"
                             >
                               📦 أرشفة
                             </button>
@@ -727,9 +893,9 @@ export default function EmployeeListView({
                                     onDeleteEmployee(e.iqamaNo);
                                   }
                                 }}
-                                className="px-1.5 py-1 text-red-600 hover:bg-red-50 rounded-lg transition-all"
+                                className="px-1 py-0.5 text-red-600 hover:bg-red-50 rounded transition-all"
                               >
-                                <Trash2 className="w-4 h-4" />
+                                <Trash2 className="w-3.5 h-3.5" />
                               </button>
                             )}
                           </>
@@ -776,21 +942,24 @@ export default function EmployeeListView({
             </div>
             
             <div className="p-5 max-h-[80vh] overflow-y-auto space-y-4 text-xs font-bold text-slate-700">
-              <div className="flex gap-2">
-                <button 
-                  type="button" 
-                  onClick={() => setGregMode(true)}
-                  className={`flex-1 py-2 text-center rounded-lg ${gregMode ? 'bg-primary text-white' : 'bg-slate-150 text-slate-700'}`}
-                >
-                  ميلادي
-                </button>
-                <button 
-                  type="button" 
-                  onClick={() => setGregMode(false)}
-                  className={`flex-1 py-2 text-center rounded-lg ${!gregMode ? 'bg-primary text-white' : 'bg-slate-150 text-slate-700'}`}
-                >
-                  هجري
-                </button>
+              <div className="space-y-1.5">
+                <label className="text-slate-600 block mb-1 font-extrabold">📅 نوع التقويم لتاريخ انتهاء الإقامة:</label>
+                <div className="flex gap-2 bg-slate-100 p-1 rounded-xl border border-slate-200">
+                  <button 
+                    type="button" 
+                    onClick={() => setGregMode(true)}
+                    className={`flex-1 py-1.5 text-center rounded-lg font-bold text-xs transition-colors cursor-pointer ${gregMode ? 'bg-[#0d5189] text-white shadow-sm' : 'text-slate-600 hover:bg-slate-200/50 hover:text-slate-700'}`}
+                  >
+                    ميلادي (اختر التاريخ)
+                  </button>
+                  <button 
+                    type="button" 
+                    onClick={() => setGregMode(false)}
+                    className={`flex-1 py-1.5 text-center rounded-lg font-bold text-xs transition-colors cursor-pointer ${!gregMode ? 'bg-[#0d5189] text-white shadow-sm' : 'text-slate-600 hover:bg-slate-200/50 hover:text-slate-700'}`}
+                  >
+                    هجري (كتابة مع تحويل تلقائي)
+                  </button>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -816,7 +985,7 @@ export default function EmployeeListView({
               ) : (
                 <div className="space-y-1.5">
                   <label>تاريخ انتهاء الإقامة هجرياً (مثال: 1447/10/15) *</label>
-                  <input type="text" value={newExpiryHijri} onChange={(e) => setNewExpiryHijri(e.target.value)} placeholder="مثال: 1447/09/25" className="w-full text-xs font-mono py-2 px-3 border border-slate-200 rounded-lg" />
+                  <input type="text" value={newExpiryHijri} onChange={(e) => setNewExpiryHijri(e.target.value)} required placeholder="مثال: 1447/09/25" className="w-full text-xs font-mono py-2 px-3 border border-slate-200 rounded-lg" />
                   <span className="text-[10px] text-slate-400 block mt-1">سيقوم الخوارزمي بتحويل التاريخ لميلادي وتثبيته فوراً.</span>
                 </div>
               )}
@@ -1332,7 +1501,7 @@ export default function EmployeeListView({
         </div>
       )}
 
-      {/* 📅 MODAL 4: UPDATE EXPIRY DATE GREGORIAN */}
+      {/* 📅 MODAL 4: UPDATE EXPIRY DATE GREGORIAN OR HIJRI */}
       {isExpiryOpen && selectedEmp && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-sm w-full shadow-2xl border border-slate-100 overflow-hidden text-right">
@@ -1350,11 +1519,37 @@ export default function EmployeeListView({
                 <span className="text-slate-800 text-sm block">{selectedEmp.name}</span>
               </div>
 
-              <div className="space-y-1.5">
-                <label>تاريخ انتهاء الإقامة الميلادي الجديد *</label>
-                <input type="date" value={newExpDateRaw} onChange={(e) => setNewExpDateRaw(e.target.value)} required className="w-full py-2 px-3 border border-slate-200 rounded-lg text-xs font-mono" />
-                <span className="text-[10px] text-slate-400 block leading-normal mt-1.5">سيقوم النظام بإجراء الترقيم الهجري وتقديم التنبيهات اللازمة بالصفحة الرئيسية تلقائيّاً بعد الحفظ.</span>
+              <div className="flex gap-2">
+                <button 
+                  type="button" 
+                  onClick={() => setRenewGregMode(true)}
+                  className={`flex-1 py-1.5 text-center rounded-lg text-[11px] font-bold ${renewGregMode ? 'bg-[#0b2844] text-white' : 'bg-slate-150 text-slate-700'}`}
+                >
+                  ميلادي
+                </button>
+                <button 
+                  type="button" 
+                  onClick={() => setRenewGregMode(false)}
+                  className={`flex-1 py-1.5 text-center rounded-lg text-[11px] font-bold ${!renewGregMode ? 'bg-[#0b2844] text-white' : 'bg-slate-150 text-slate-700'}`}
+                >
+                  هجري
+                </button>
               </div>
+
+              {renewGregMode ? (
+                <div className="space-y-1.5">
+                  <label>تاريخ انتهاء الإقامة الميلادي الجديد *</label>
+                  <input type="date" value={newExpDateRaw} onChange={(e) => setNewExpDateRaw(e.target.value)} required className="w-full py-2 px-3 border border-slate-200 rounded-lg text-xs font-mono" />
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  <label>تاريخ انتهاء الإقامة الهجري الجديد (مثال: 1447/10/15) *</label>
+                  <input type="text" value={renewExpiryHijri} onChange={(e) => setRenewExpiryHijri(e.target.value)} placeholder="مثال: 1447/09/25" className="w-full text-xs font-mono py-2 px-3 border border-slate-200 rounded-lg" required />
+                  <span className="text-[10px] text-slate-400 block leading-normal mt-1">سيقوم الخوارزمي بتحويل التاريخ لميلادي وتثبيته فوراً بعد الحفظ.</span>
+                </div>
+              )}
+
+              <span className="text-[10px] text-slate-400 block leading-normal mt-1.5">سيقوم النظام بإجراء الترقيم الهجري وتقديم التنبيهات اللازمة بالصفحة الرئيسية تلقائيّاً بعد الحفظ.</span>
             </div>
 
             <div className="p-4 bg-slate-50 border-t border-slate-150 flex justify-end gap-2.5">

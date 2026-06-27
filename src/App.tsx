@@ -145,6 +145,60 @@ export default function App() {
     }
   }, [currentUser]);
 
+  // Dynamically update browser tab title and favicon whenever companySettings name or logoBase64 changes
+  useEffect(() => {
+    if (companySettings.name) {
+      document.title = companySettings.name;
+    } else {
+      document.title = 'نظام إدارة ومتابعة العمالة';
+    }
+  }, [companySettings.name]);
+
+  useEffect(() => {
+    let link: HTMLLinkElement | null = document.querySelector("link[rel~='icon']");
+    if (companySettings.logoBase64) {
+      if (link) {
+        link.href = companySettings.logoBase64;
+      } else {
+        const newLink = document.createElement('link');
+        newLink.rel = 'icon';
+        newLink.href = companySettings.logoBase64;
+        document.head.appendChild(newLink);
+      }
+    } else {
+      // Use building emoji canvas as dynamic fallback favicon
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = 64;
+        canvas.height = 64;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.font = '48px serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText('🏢', 32, 32);
+          const emojiUrl = canvas.toDataURL('image/png');
+          if (link) {
+            link.href = emojiUrl;
+          } else {
+            const newLink = document.createElement('link');
+            newLink.rel = 'icon';
+            newLink.href = emojiUrl;
+            document.head.appendChild(newLink);
+          }
+        } else {
+          if (link) {
+            link.href = '/favicon.ico';
+          }
+        }
+      } catch (err) {
+        if (link) {
+          link.href = '/favicon.ico';
+        }
+      }
+    }
+  }, [companySettings.logoBase64]);
+
   // Sync savers
   const saveEmployees = (list: Employee[]) => {
     setEmployees(list);
@@ -691,10 +745,13 @@ export default function App() {
         </header>
 
         {/* 3. Main Central App Area */}
-        <main className="flex-grow p-6 space-y-6">
+        <main className="flex-grow p-4 md:p-6 lg:p-8 bg-[#f4f7fc]/50">
           
-          {/* Detailed Statement View triggered (Overrides the tab content like a detail sheet) */}
-          {selectedStatementEmp ? (
+          {/* 🌟 Professional Glassmorphic Content Panel with Custom Shadow & Padding 🌟 */}
+          <div className="flex flex-col gap-6 p-5 md:p-7 bg-white rounded-3xl border border-slate-200/50 shadow-[0_15px_45px_0_rgba(11,40,68,0.06),0_2px_8px_-2px_rgba(0,0,0,0.015)] min-w-0 transition-all duration-300">
+            
+            {/* Detailed Statement View triggered (Overrides the tab content like a detail sheet) */}
+            {selectedStatementEmp ? (
             <div className="space-y-4">
               <button 
                 onClick={() => setSelectedStatementEmp(null)}
@@ -730,6 +787,7 @@ export default function App() {
                   branches={branches}
                   onClearLogs={handleClearLogs}
                   activeRole={currentUser.role}
+                  logoBase64={companySettings.logoBase64}
                 />
               )}
 
@@ -1161,6 +1219,7 @@ export default function App() {
             </>
           )}
 
+          </div>
         </main>
       </div>
 
