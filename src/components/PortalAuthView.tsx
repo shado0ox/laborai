@@ -1,6 +1,9 @@
 import React, { useState } from 'react';
 import { UserProfile } from '../types';
-import { ShieldCheck, Mail, Lock, User, Sparkles, Building, KeyRound, ArrowRight, UserPlus, FileText, CheckCircle2 } from 'lucide-react';
+import { 
+  ShieldCheck, Mail, Lock, User, Sparkles, Building, KeyRound, 
+  ArrowRight, UserPlus, FileText, CheckCircle2, RefreshCw, Database, Wifi, WifiOff, AlertTriangle 
+} from 'lucide-react';
 
 interface PortalAuthViewProps {
   users: UserProfile[];
@@ -8,6 +11,15 @@ interface PortalAuthViewProps {
   onRegisterSubmit: (newUser: UserProfile) => void;
   companyName: string;
   logoBase64?: string;
+  dbStatusInfo: {
+    status: 'connected' | 'disconnected';
+    host: string;
+    port: number;
+    user: string;
+    database: string;
+    error: string | null;
+  } | null;
+  onRefreshDbStatus: () => Promise<void>;
 }
 
 export default function PortalAuthView({
@@ -15,9 +27,18 @@ export default function PortalAuthView({
   onLoginSuccess,
   onRegisterSubmit,
   companyName,
-  logoBase64
+  logoBase64,
+  dbStatusInfo,
+  onRefreshDbStatus
 }: PortalAuthViewProps) {
   const [activeMode, setActiveMode] = useState<'login' | 'register'>('login');
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    await onRefreshDbStatus();
+    setIsRefreshing(false);
+  };
   
   // Login Form States
   const [loginEmail, setLoginEmail] = useState('');
@@ -362,6 +383,86 @@ export default function PortalAuthView({
             </button>
           </div>
         )}
+
+        {/* Real-time DB Connection status display */}
+        <div className="border-t border-slate-800/80 pt-4 mt-2">
+          <div className="flex items-center justify-between mb-2 select-none">
+            <div className="flex items-center gap-1.5 text-slate-300 font-extrabold text-xs">
+              <Database className="w-4 h-4 text-amber-500" />
+              <span>اتصال السيرفر وقاعدة البيانات (MariaDB)</span>
+            </div>
+            <button
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              className="p-1.5 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg border border-slate-800 transition-all cursor-pointer flex items-center justify-center disabled:opacity-50"
+              title="تحديث حالة الاتصال بقاعدة البيانات"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-amber-500' : ''}`} />
+            </button>
+          </div>
+
+          {dbStatusInfo === null ? (
+            <div className="bg-slate-900/60 border border-slate-800/50 p-3 rounded-xl text-center">
+              <p className="text-xs text-amber-400 font-bold flex items-center justify-center gap-1.5">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                جاري فحص الاتصال بقاعدة البيانات...
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between bg-slate-900/80 border border-slate-800/60 p-2.5 rounded-xl">
+                <span className="text-[11px] text-slate-400 font-bold">الحالة الحالية للربط:</span>
+                {dbStatusInfo.status === 'connected' ? (
+                  <span className="px-2 py-0.5 bg-emerald-950/80 text-emerald-400 border border-emerald-800/80 text-[10px] rounded-lg font-black flex items-center gap-1">
+                    <Wifi className="w-3 h-3 text-emerald-400 animate-pulse" />
+                    متصل ونشط ✅
+                  </span>
+                ) : (
+                  <span className="px-2 py-0.5 bg-rose-950/80 text-rose-400 border border-rose-800/80 text-[10px] rounded-lg font-black flex items-center gap-1">
+                    <WifiOff className="w-3 h-3 text-rose-400" />
+                    منفصل (يعمل محلياً) ❌
+                  </span>
+                )}
+              </div>
+
+              {/* Server Connection Parameters */}
+              <div className="grid grid-cols-2 gap-2 text-[10px] font-mono select-all">
+                <div className="p-2 bg-slate-900/40 border border-slate-800/40 rounded-lg text-slate-300">
+                  <div className="text-slate-500 font-bold text-[9px] mb-0.5">عنوان السيرفر (Host)</div>
+                  <div className="font-extrabold truncate">{dbStatusInfo.host || '---'}</div>
+                </div>
+                <div className="p-2 bg-slate-900/40 border border-slate-800/40 rounded-lg text-slate-300">
+                  <div className="text-slate-500 font-bold text-[9px] mb-0.5">المنفذ (Port)</div>
+                  <div className="font-extrabold">{dbStatusInfo.port || '---'}</div>
+                </div>
+                <div className="p-2 bg-slate-900/40 border border-slate-800/40 rounded-lg text-slate-300">
+                  <div className="text-slate-500 font-bold text-[9px] mb-0.5">مستخدم القاعدة</div>
+                  <div className="font-extrabold truncate">{dbStatusInfo.user || '---'}</div>
+                </div>
+                <div className="p-2 bg-slate-900/40 border border-slate-800/40 rounded-lg text-slate-300">
+                  <div className="text-slate-500 font-bold text-[9px] mb-0.5">اسم قاعدة البيانات</div>
+                  <div className="font-extrabold truncate">{dbStatusInfo.database || '---'}</div>
+                </div>
+              </div>
+
+              {/* If there is a connection error, display it beautifully so they know why it timed out or can't connect */}
+              {dbStatusInfo.error && (
+                <div className="bg-rose-950/50 border border-rose-900/60 p-2.5 rounded-xl space-y-1 select-text">
+                  <div className="flex items-center gap-1 text-rose-400 text-[11px] font-extrabold">
+                    <AlertTriangle className="w-3.5 h-3.5" />
+                    <span>تنبيه خطأ الاتصال المباشر:</span>
+                  </div>
+                  <p className="text-[10px] text-rose-200/90 leading-relaxed font-mono whitespace-pre-wrap break-all">
+                    {dbStatusInfo.error}
+                  </p>
+                  <p className="text-[9px] text-amber-300/80 leading-relaxed font-sans text-right">
+                    💡 تلميح: النظام يعمل الآن تلقائياً بوضعية حفظ البيانات محلياً بمتصفحك حتى تعيد ضبط إعدادات Docker أو متغيرات البيئة.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
 
       </div>
 

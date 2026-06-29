@@ -73,7 +73,7 @@ export default function SidebarMenu({
     { id: 'archive', label: 'الأرشيف والمستبعدين', icon: <Archive className="w-5 h-5" />, section: 'قواعد البيانات' },
     { id: 'settings', label: 'هوية الشركة والأسعار', icon: <Settings className="w-5 h-5" />, section: 'الإدارة العامة' },
     ...(currentUser.email === 'shady.nasif@gmail.com' ? [
-      { id: 'help', label: 'المنظومة والدوكر محلياً', icon: <HelpCircle className="w-5 h-5" />, section: 'الإعادة والدعم' }
+      { id: 'docker', label: 'تبويب الدوكر ومعالج الاتصال', icon: <HelpCircle className="w-5 h-5" />, section: 'الإعادة والدعم' }
     ] : [])
   ];
 

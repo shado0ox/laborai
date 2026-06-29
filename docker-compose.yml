@@ -26,6 +26,22 @@ services:
     depends_on:
       - mariadb_db
 
+  labor_app:
+    build: .
+    container_name: labor_app_container
+    restart: always
+    ports:
+      - "3150:3150"
+    environment:
+      - PORT=3150
+      - DB_HOST=mariadb_db
+      - DB_PORT=3306
+      - DB_USER=labor_admin
+      - DB_PASSWORD=StrongLocalPassword2026
+      - DB_DATABASE=labor_management_db
+    depends_on:
+      - mariadb_db
+
 volumes:
   mariadb_data:
 

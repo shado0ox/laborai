@@ -12,7 +12,6 @@ import EmployeeListView from './components/EmployeeListView';
 import AlertsListView from './components/AlertsListView';
 import PaymentsListView from './components/PaymentsListView';
 import MonthlyFinanceView from './components/MonthlyFinanceView';
-import LocalSetupGuide from './components/LocalSetupGuide';
 import LedgerStatement from './components/LedgerStatement';
 import PortalAuthView from './components/PortalAuthView';
 import PortalApprovalsView from './components/PortalApprovalsView';
@@ -54,95 +53,283 @@ export default function App() {
   const [newUserRole, setNewUserRole] = useState<'admin' | 'branch' | 'viewer'>('branch');
   const [newUserBranch, setNewUserBranch] = useState('');
 
-  // 1. Initial global app boot loader
-  useEffect(() => {
-    try {
-      const storedUsers = localStorage.getItem('labor_users');
-      if (storedUsers) {
-        setUsers(JSON.parse(storedUsers));
-      } else {
-        setUsers(INITIAL_USERS);
-        localStorage.setItem('labor_users', JSON.stringify(INITIAL_USERS));
-      }
+  // DB diagnostics and migration states
+  const [dbStatusInfo, setDbStatusInfo] = useState<{
+    status: 'connected' | 'disconnected';
+    host: string;
+    port: number;
+    user: string;
+    database: string;
+    error: string | null;
+  } | null>(null);
 
-      // Check current session
-      const storedCurrentUser = localStorage.getItem('labor_current_user');
-      if (storedCurrentUser) {
-        const u = JSON.parse(storedCurrentUser) as UserProfile;
-        setCurrentUser(u);
+  const [migrationStatus, setMigrationStatus] = useState<'idle' | 'migrating' | 'success' | 'error' | 'no_data'>('idle');
+  const [migrationLog, setMigrationLog] = useState<string[]>([]);
+  const [hasLocalData, setHasLocalData] = useState(false);
+
+  const fetchDbStatus = async () => {
+    try {
+      const res = await fetch('/api/db-status');
+      if (res.ok) {
+        const data = await res.json();
+        setDbStatusInfo(data);
       }
     } catch (e) {
-      console.error('LocalStorage global boot error:', e);
+      console.error('Failed to fetch db status:', e);
     }
+  };
+
+  // Check if there is local data in localStorage
+  useEffect(() => {
+    let found = false;
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('labor_') && (key.includes('employees') || key.includes('payments')) && !key.includes('current_user') && !key.includes('users')) {
+        const data = localStorage.getItem(key);
+        if (data) {
+          try {
+            const parsed = JSON.parse(data);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              found = true;
+            }
+          } catch(e) {}
+        }
+      }
+    }
+    setHasLocalData(found);
+  }, []);
+
+  const runMigration = async () => {
+    setMigrationStatus('migrating');
+    setMigrationLog(['جاري بدء ترحيل البيانات المحلية من المتصفح إلى السيرفر...']);
+    try {
+      let employeesMigrated = 0;
+      let paymentsMigrated = 0;
+      let logsMigrated = 0;
+      let branchesMigrated = 0;
+
+      // Scan and find data
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i) || '';
+        if (key.startsWith('labor_') && !key.includes('current_user') && !key.includes('users')) {
+          const raw = localStorage.getItem(key);
+          if (!raw) continue;
+          let parsed: any;
+          try {
+            parsed = JSON.parse(raw);
+          } catch(e) {
+            continue;
+          }
+
+          // Detect tenant id
+          // Key format: labor_employees or labor_EP_employees
+          const parts = key.split('_');
+          let tenantId = '';
+          if (parts.length > 2) {
+            // e.g. labor_EP_employees -> parts is ["labor", "EP", "employees"]
+            tenantId = parts[1];
+          }
+
+          // 1. Employees
+          if (key.includes('employees') && Array.isArray(parsed)) {
+            setMigrationLog(p => [...p, `جاري ترحيل ${parsed.length} موظف إلى السيرفر لـ ${tenantId || 'الرئيسي'}...`]);
+            for (const emp of parsed) {
+              await fetch(`/api/employees?tenantId=${tenantId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(emp)
+              });
+              employeesMigrated++;
+            }
+          }
+
+          // 2. Payments
+          if (key.includes('payments') && Array.isArray(parsed)) {
+            setMigrationLog(p => [...p, `جاري ترحيل ${parsed.length} دفعة مالية إلى السيرفر لـ ${tenantId || 'الرئيسي'}...`]);
+            for (const pmt of parsed) {
+              await fetch(`/api/payments?tenantId=${tenantId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(pmt)
+              });
+              paymentsMigrated++;
+            }
+          }
+
+          // 3. Branches
+          if (key.includes('branches') && Array.isArray(parsed)) {
+            setMigrationLog(p => [...p, `جاري ترحيل الفروع إلى السيرفر لـ ${tenantId || 'الرئيسي'}...`]);
+            await fetch(`/api/branches?tenantId=${tenantId}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(parsed)
+            });
+            branchesMigrated += parsed.length;
+          }
+
+          // 4. Logs
+          if (key.includes('logs') && Array.isArray(parsed)) {
+            setMigrationLog(p => [...p, `جاري ترحيل سجلات الحركة إلى السيرفر لـ ${tenantId || 'الرئيسي'}...`]);
+            for (const logItem of parsed) {
+              await fetch(`/api/logs?tenantId=${tenantId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(logItem)
+              });
+              logsMigrated++;
+            }
+          }
+        }
+      }
+
+      setMigrationLog(p => [...p, `✅ تم اكتمال الترحيل بنجاح!`]);
+      setMigrationLog(p => [...p, `📊 الإحصائيات: تم ترحيل ${employeesMigrated} موظف، ${paymentsMigrated} دفعة مالية، ${branchesMigrated} فروع، ${logsMigrated} سجل حركة.`]);
+      setMigrationStatus('success');
+      setHasLocalData(false);
+
+      // Refresh states
+      if (currentUser) {
+        const tid = currentUser.tenantId || '';
+        const empRes = await fetch(`/api/employees?tenantId=${tid}`);
+        if (empRes.ok) setEmployees(await empRes.json());
+        const payRes = await fetch(`/api/payments?tenantId=${tid}`);
+        if (payRes.ok) setPayments(await payRes.json());
+        const logRes = await fetch(`/api/logs?tenantId=${tid}`);
+        if (logRes.ok) setLogs(await logRes.json());
+      }
+
+      if (confirm('✅ تم ترحيل كافة البيانات وحفظها بنجاح بقاعدة البيانات!\n\nهل ترغب في مسح البيانات المؤقتة والقديمة من متصفحك الآن لتجنب تكرار هذا التنبيه؟')) {
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith('labor_') && !key.includes('current_user') && !key.includes('users')) {
+            localStorage.removeItem(key);
+          }
+        }
+      }
+    } catch (err: any) {
+      console.error(err);
+      setMigrationLog(p => [...p, `❌ حدث خطأ أثناء الترحيل: ${err.message || String(err)}`]);
+      setMigrationStatus('error');
+    }
+  };
+
+  useEffect(() => {
+    fetchDbStatus();
+    const interval = setInterval(fetchDbStatus, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // 1. Initial global app boot loader
+  useEffect(() => {
+    async function loadGlobalData() {
+      try {
+        const res = await fetch('/api/users');
+        if (res.ok) {
+          const fetchedUsers = await res.json() as UserProfile[];
+          if (fetchedUsers.length === 0) {
+            // Seed INITIAL_USERS to database
+            for (const u of INITIAL_USERS) {
+              await fetch('/api/users', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(u)
+              });
+            }
+            setUsers(INITIAL_USERS);
+          } else {
+            setUsers(fetchedUsers);
+          }
+        } else {
+          setUsers(INITIAL_USERS);
+        }
+
+        // Check current session
+        const storedCurrentUser = localStorage.getItem('labor_current_user');
+        if (storedCurrentUser) {
+          const u = JSON.parse(storedCurrentUser) as UserProfile;
+          setCurrentUser(u);
+        }
+      } catch (e) {
+        console.error('API global boot error:', e);
+        setUsers(INITIAL_USERS);
+      }
+    }
+    loadGlobalData();
   }, []);
 
   // 2. Tenant/Workspace data loader - triggers whenever currentUser changes!
   useEffect(() => {
     if (!currentUser) return;
-    try {
-      const tid = currentUser.tenantId;
-      const empKey = tid ? `labor_${tid}_employees` : 'labor_employees';
-      const payKey = tid ? `labor_${tid}_payments` : 'labor_payments';
-      const branchKey = tid ? `labor_${tid}_branches` : 'labor_branches';
-      const logKey = tid ? `labor_${tid}_logs` : 'labor_logs';
-      const compKey = tid ? `labor_${tid}_company` : 'labor_company';
-      const pricKey = tid ? `labor_${tid}_pricing` : 'labor_pricing';
+    async function loadTenantData() {
+      const tid = currentUser.tenantId || '';
+      try {
+        // Fetch Employees
+        const empRes = await fetch(`/api/employees?tenantId=${tid}`);
+        if (empRes.ok) {
+          const data = await empRes.json();
+          setEmployees(data);
+        }
 
-      const storedEmps = localStorage.getItem(empKey);
-      const storedPays = localStorage.getItem(payKey);
-      const storedBranches = localStorage.getItem(branchKey);
-      const storedLogs = localStorage.getItem(logKey);
-      const storedCompany = localStorage.getItem(compKey);
-      const storedPricing = localStorage.getItem(pricKey);
+        // Fetch Payments
+        const payRes = await fetch(`/api/payments?tenantId=${tid}`);
+        if (payRes.ok) {
+          const data = await payRes.json();
+          setPayments(data);
+        }
 
-      if (storedEmps) {
-        setEmployees(JSON.parse(storedEmps));
-      } else {
-        setEmployees(INITIAL_EMPLOYEES);
-        localStorage.setItem(empKey, JSON.stringify(INITIAL_EMPLOYEES));
+        // Fetch Branches
+        const branchRes = await fetch(`/api/branches?tenantId=${tid}`);
+        if (branchRes.ok) {
+          const data = await branchRes.json();
+          if (data && data.length > 0) {
+            setBranches(data);
+          } else {
+            const initialBrs = tid ? [] : INITIAL_BRANCHES;
+            setBranches(initialBrs);
+            if (initialBrs.length > 0) {
+              await fetch(`/api/branches?tenantId=${tid}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(initialBrs)
+              });
+            }
+          }
+        }
+
+        // Fetch Logs
+        const logRes = await fetch(`/api/logs?tenantId=${tid}`);
+        if (logRes.ok) {
+          const data = await logRes.json();
+          if (data && data.length > 0) {
+            setLogs(data);
+          } else {
+            setLogs(INITIAL_LOGS);
+            await fetch(`/api/logs?tenantId=${tid}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(INITIAL_LOGS[0])
+            });
+          }
+        }
+
+        // Fetch Company
+        const compRes = await fetch(`/api/company-settings?tenantId=${tid}`);
+        if (compRes.ok) {
+          const data = await compRes.json();
+          setCompanySettings(data);
+        }
+
+        // Fetch Pricing
+        const pricRes = await fetch(`/api/pricing-settings?tenantId=${tid}`);
+        if (pricRes.ok) {
+          const data = await pricRes.json();
+          setPricingSettings(data);
+        }
+      } catch (err) {
+        console.error('API tenant load error, using fallback states', err);
       }
-
-      if (storedPays) {
-        setPayments(JSON.parse(storedPays));
-      } else {
-        setPayments(INITIAL_PAYMENTS);
-        localStorage.setItem(payKey, JSON.stringify(INITIAL_PAYMENTS));
-      }
-
-      if (storedBranches) {
-        setBranches(JSON.parse(storedBranches));
-      } else {
-        const initialBrs = tid ? [] : INITIAL_BRANCHES;
-        setBranches(initialBrs);
-        localStorage.setItem(branchKey, JSON.stringify(initialBrs));
-      }
-
-      if (storedLogs) {
-        setLogs(JSON.parse(storedLogs));
-      } else {
-        const initialLgs = INITIAL_LOGS;
-        setLogs(initialLgs);
-        localStorage.setItem(logKey, JSON.stringify(initialLgs));
-      }
-
-      if (storedCompany) {
-        setCompanySettings(JSON.parse(storedCompany));
-      } else {
-        const defaultCompany = { name: tid ? `لوحة حسابات ومساحة ${currentUser.name}` : 'مؤسسة الرواد لإدارة العمالة والتشغيل' };
-        setCompanySettings(defaultCompany);
-        localStorage.setItem(compKey, JSON.stringify(defaultCompany));
-      }
-
-      if (storedPricing) {
-        setPricingSettings(JSON.parse(storedPricing));
-      } else {
-        const defaultPricing = { kafala: 250, iqama3: 3550, iqama6: 7100, iqama12: 14200, ramadanFree: true };
-        setPricingSettings(defaultPricing);
-        localStorage.setItem(pricKey, JSON.stringify(defaultPricing));
-      }
-    } catch (e) {
-      console.error('Tenant load error:', e);
     }
+    loadTenantData();
   }, [currentUser]);
 
   // Dynamically update browser tab title and favicon whenever companySettings name or logoBase64 changes
@@ -199,34 +386,34 @@ export default function App() {
     }
   }, [companySettings.logoBase64]);
 
-  // Sync savers
+  // Sync savers (pure React updates - API persists on action)
   const saveEmployees = (list: Employee[]) => {
     setEmployees(list);
-    const key = currentUser?.tenantId ? `labor_${currentUser.tenantId}_employees` : 'labor_employees';
-    localStorage.setItem(key, JSON.stringify(list));
   };
 
   const savePayments = (list: Payment[]) => {
     setPayments(list);
-    const key = currentUser?.tenantId ? `labor_${currentUser.tenantId}_payments` : 'labor_payments';
-    localStorage.setItem(key, JSON.stringify(list));
   };
 
-  const saveBranchesList = (list: string[]) => {
+  const saveBranchesList = async (list: string[]) => {
     setBranches(list);
-    const key = currentUser?.tenantId ? `labor_${currentUser.tenantId}_branches` : 'labor_branches';
-    localStorage.setItem(key, JSON.stringify(list));
+    try {
+      await fetch(`/api/branches?tenantId=${currentUser?.tenantId || ''}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(list)
+      });
+    } catch (err) {
+      console.error('API branches save error:', err);
+    }
   };
 
   const saveLogsList = (list: ActivityLog[]) => {
     setLogs(list);
-    const key = currentUser?.tenantId ? `labor_${currentUser.tenantId}_logs` : 'labor_logs';
-    localStorage.setItem(key, JSON.stringify(list));
   };
 
   const saveUsersList = (list: UserProfile[]) => {
     setUsers(list);
-    localStorage.setItem('labor_users', JSON.stringify(list));
   };
 
   const handleLogout = () => {
@@ -243,37 +430,62 @@ export default function App() {
     setActiveTab('dashboard');
   };
 
-  const handleRegisterSubmit = (newUser: UserProfile) => {
+  const handleRegisterSubmit = async (newUser: UserProfile) => {
     const updatedUsers = [...users, newUser];
-    saveUsersList(updatedUsers);
+    setUsers(updatedUsers);
+    try {
+      await fetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newUser)
+      });
+    } catch (err) {
+      console.error('API register user error:', err);
+    }
   };
 
-  const handleUpdateUserStatus = (uid: string, status: 'approved' | 'rejected') => {
+  const handleUpdateUserStatus = async (uid: string, status: 'approved' | 'rejected') => {
     const updated = users.map(u => {
       if (u.uid === uid) {
         return { ...u, status };
       }
       return u;
     });
-    saveUsersList(updated);
+    setUsers(updated);
     
     const uName = users.find(u => u.uid === uid)?.name || 'مستخدم غير معروف';
-    const actionText = status === 'approved' 
-      ? `اعتماد وتنشيط حساب المستخدم الجديد بالبوابة: ${uName}` 
-      : `رفض تفعيل حساب المستخدم الجديد بالبوابة: ${uName}`;
-    logActivity('update', actionText);
-    toastNotice(status === 'approved' ? '✓ تم تنشيط الحساب بنجاح!' : 'تم رفض الحساب.');
+    try {
+      await fetch(`/api/users/${uid}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status })
+      });
+      const actionText = status === 'approved' 
+        ? `اعتماد وتنشيط حساب المستخدم الجديد بالبوابة: ${uName}` 
+        : `رفض تفعيل حساب المستخدم الجديد بالبوابة: ${uName}`;
+      logActivity(status === 'approved' ? 'update' : 'del', actionText);
+      toastNotice(status === 'approved' ? '✓ تم تنشيط الحساب بنجاح!' : 'تم رفض الحساب.');
+    } catch (err) {
+      console.error('API user status update error:', err);
+    }
   };
 
-  const handleDeleteUser = (uid: string) => {
+  const handleDeleteUser = async (uid: string) => {
     const uName = users.find(u => u.uid === uid)?.name || 'مستخدم';
     const updated = users.filter(u => u.uid !== uid);
-    saveUsersList(updated);
-    logActivity('update', `حذف كامل لحساب وعضوية المستخدم: ${uName} من السيرفر.`);
-    toastNotice('✓ تم حذف الحساب بنجاح.');
+    setUsers(updated);
+    try {
+      await fetch(`/api/users/${uid}`, {
+        method: 'DELETE'
+      });
+      logActivity('update', `حذف كامل لحساب وعضوية المستخدم: ${uName} من السيرفر.`);
+      toastNotice('✓ تم حذف الحساب بنجاح.');
+    } catch (err) {
+      console.error('API user delete error:', err);
+    }
   };
 
-  const handleUpdateUserRole = (uid: string, role: 'admin' | 'branch' | 'viewer', branch?: string) => {
+  const handleUpdateUserRole = async (uid: string, role: 'admin' | 'branch' | 'viewer', branch?: string) => {
     const uName = users.find(u => u.uid === uid)?.name || 'مستخدم';
     const updated = users.map(u => {
       if (u.uid === uid) {
@@ -281,12 +493,21 @@ export default function App() {
       }
       return u;
     });
-    saveUsersList(updated);
-    logActivity('update', `تعديل صلاحيات حساب الموظف ${uName} لتصبح: ${role}`);
-    toastNotice('✓ تم تعديل الرتبة بنجاح.');
+    setUsers(updated);
+    try {
+      await fetch(`/api/users/${uid}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role, branch })
+      });
+      logActivity('update', `تعديل صلاحيات حساب الموظف ${uName} لتصبح: ${role}`);
+      toastNotice('✓ تم تعديل الرتبة بنجاح.');
+    } catch (err) {
+      console.error('API user role update error:', err);
+    }
   };
 
-  const logActivity = (type: ActivityLog['type'], text: string) => {
+  const logActivity = async (type: ActivityLog['type'], text: string) => {
     const newLog: ActivityLog = {
       id: `log_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
       type,
@@ -294,30 +515,56 @@ export default function App() {
       user: currentUser?.name || 'النظام',
       time: new Date().toISOString().slice(0, 19).replace('T', ' ')
     };
-    saveLogsList([newLog, ...logs]);
-  };
-
-  // Mutators and state updates
-  const handleAddEmployee = (emp: Employee) => {
-    saveEmployees([emp, ...employees]);
-    logActivity('add', `إضافة موظف عمالة جديد لقاعدة البيانات: ${emp.name} | رقم الإقامة: ${emp.iqamaNo}`);
-  };
-
-  const handleDeleteEmployee = (iqamaNo: string) => {
-    const emp = employees.find(e => e.iqamaNo === iqamaNo);
-    const updated = employees.filter(e => e.iqamaNo !== iqamaNo);
-    saveEmployees(updated);
-    
-    // Cascading delete related payments too
-    const filteredPayments = payments.filter(p => p.iqamaNo !== iqamaNo);
-    savePayments(filteredPayments);
-
-    if (emp) {
-      logActivity('del', `حذف كلي ونهائي لملف العامل: ${emp.name} من شاشات الإدارة.`);
+    setLogs(prev => [newLog, ...prev]);
+    try {
+      await fetch(`/api/logs?tenantId=${currentUser?.tenantId || ''}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newLog)
+      });
+    } catch (err) {
+      console.error('API log activity error:', err);
     }
   };
 
-  const handleArchiveEmployee = (iqamaNo: string, reason: string) => {
+  // Mutators and state updates
+  const handleAddEmployee = async (emp: Employee) => {
+    const updated = [emp, ...employees];
+    setEmployees(updated);
+    try {
+      await fetch(`/api/employees?tenantId=${currentUser?.tenantId || ''}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(emp)
+      });
+      logActivity('add', `إضافة موظف عمالة جديد لقاعدة البيانات: ${emp.name} | رقم الإقامة: ${emp.iqamaNo}`);
+    } catch (err) {
+      console.error('API add employee error:', err);
+    }
+  };
+
+  const handleDeleteEmployee = async (iqamaNo: string) => {
+    const emp = employees.find(e => e.iqamaNo === iqamaNo);
+    const updated = employees.filter(e => e.iqamaNo !== iqamaNo);
+    setEmployees(updated);
+    
+    // Cascading delete related payments too
+    const filteredPayments = payments.filter(p => p.iqamaNo !== iqamaNo);
+    setPayments(filteredPayments);
+
+    try {
+      await fetch(`/api/employees/${iqamaNo}`, {
+        method: 'DELETE'
+      });
+      if (emp) {
+        logActivity('del', `حذف كلي ونهائي لملف العامل: ${emp.name} من شاشات الإدارة.`);
+      }
+    } catch (err) {
+      console.error('API delete employee error:', err);
+    }
+  };
+
+  const handleArchiveEmployee = async (iqamaNo: string, reason: string) => {
     const updated = employees.map(e => {
       if (e.iqamaNo === iqamaNo) {
         return {
@@ -329,15 +576,24 @@ export default function App() {
       }
       return e;
     });
-    saveEmployees(updated);
+    setEmployees(updated);
     
-    const emp = employees.find(e => e.iqamaNo === iqamaNo);
+    const emp = updated.find(e => e.iqamaNo === iqamaNo);
     if (emp) {
-      logActivity('arc', `أرشفة واستبعاد ملف العامل: ${emp.name} — السبب: ${reason}`);
+      try {
+        await fetch(`/api/employees?tenantId=${currentUser?.tenantId || ''}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(emp)
+        });
+        logActivity('arc', `أرشفة واستبعاد ملف العامل: ${emp.name} — السبب: ${reason}`);
+      } catch (err) {
+        console.error('API archive employee error:', err);
+      }
     }
   };
 
-  const handleRestoreEmployee = (iqamaNo: string) => {
+  const handleRestoreEmployee = async (iqamaNo: string) => {
     const updated = employees.map(e => {
       if (e.iqamaNo === iqamaNo) {
         return {
@@ -349,61 +605,101 @@ export default function App() {
       }
       return e;
     });
-    saveEmployees(updated);
+    setEmployees(updated);
     
-    const emp = employees.find(e => e.iqamaNo === iqamaNo);
+    const emp = updated.find(e => e.iqamaNo === iqamaNo);
     if (emp) {
-      logActivity('restore', `إلغاء أرشفة وإرجاع الموظف ${emp.name} كنشط في النظام.`);
-      alert(`✓ تم إرجاع ${emp.name} للنظام بنجاح.`);
+      try {
+        await fetch(`/api/employees?tenantId=${currentUser?.tenantId || ''}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(emp)
+        });
+        logActivity('restore', `إلغاء أرشفة وإرجاع الموظف ${emp.name} كنشط في النظام.`);
+        alert(`✓ تم إرجاع ${emp.name} للنظام بنجاح.`);
+      } catch (err) {
+        console.error('API restore employee error:', err);
+      }
     }
   };
 
-  const handleWipeAllData = () => {
-    if (confirm("⚠️ تحذير مدمر محاسبي نهائي!\n\nهل أنت متأكد تماماً من رغبتك في حذف وإفراغ كافة بيانات العمالة، والقيود المالية، والدفعات، وسجلات الحركة بالكامل من هذا المتصفح؟\nهذا الإجراء لا يمكن التراجع عنه أبداً وسيأخذك إلى وضع بدء التشغيل النظيف.")) {
-      localStorage.removeItem('labor_employees');
-      localStorage.removeItem('labor_payments');
-      localStorage.removeItem('labor_logs');
-      setEmployees([]);
-      setPayments([]);
-      const newInitLog = {
-        id: `log_init_${Date.now()}`,
-        type: 'update' as const,
-        text: 'تم تصفير وإفراغ قاعدة البيانات بنجاح وبدء سجل نشاط جديد.',
-        user: currentUser.name,
-        time: new Date().toISOString().slice(0, 19).replace('T', ' ')
-      };
-      setLogs([newInitLog]);
-      localStorage.setItem('labor_logs', JSON.stringify([newInitLog]));
-      alert("🎉 تم تهيئة النظام ومسح كافة البيانات التجريبية بنجاح!");
+  const handleWipeAllData = async () => {
+    if (confirm("⚠️ تحذير مدمر محاسبي نهائي!\n\nهل أنت متأكد تماماً من رغبتك في حذف وإفراغ كافة بيانات العمالة، والقيود المالية، والدفعات، وسجلات الحركة بالكامل؟\nهذا الإجراء لا يمكن التراجع عنه أبداً وسيتم حذفها من قاعدة البيانات.")) {
+      try {
+        const tid = currentUser?.tenantId || '';
+        await fetch(`/api/system/wipe?tenantId=${tid}`, {
+          method: 'POST'
+        });
+        
+        setEmployees([]);
+        setPayments([]);
+        
+        const newInitLog = {
+          id: `log_init_${Date.now()}`,
+          type: 'update' as const,
+          text: 'تم تصفير وإفراغ قاعدة البيانات بنجاح وبدء سجل نشاط جديد.',
+          user: currentUser?.name || 'النظام',
+          time: new Date().toISOString().slice(0, 19).replace('T', ' ')
+        };
+        setLogs([newInitLog]);
+        
+        await fetch(`/api/logs?tenantId=${tid}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(newInitLog)
+        });
+        
+        alert("🎉 تم تهيئة النظام ومسح كافة البيانات بنجاح!");
+      } catch (err) {
+        console.error('API wipe error:', err);
+      }
     }
   };
 
-  const handleUpdateEmployee = (updatedEmp: Employee) => {
+  const handleUpdateEmployee = async (updatedEmp: Employee) => {
     const updated = employees.map(e => {
       if (e.iqamaNo === updatedEmp.iqamaNo) {
         return updatedEmp;
       }
       return e;
     });
-    saveEmployees(updated);
+    setEmployees(updated);
+    try {
+      await fetch(`/api/employees?tenantId=${currentUser?.tenantId || ''}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedEmp)
+      });
+    } catch (err) {
+      console.error('API update employee error:', err);
+    }
   };
 
-  const handleUpdateEmployeeExpiry = (iqamaNo: string, newDate: string) => {
+  const handleUpdateEmployeeExpiry = async (iqamaNo: string, newDate: string) => {
     const updated = employees.map(e => {
       if (e.iqamaNo === iqamaNo) {
         return { ...e, iqamaExpiry: newDate };
       }
       return e;
     });
-    saveEmployees(updated);
+    setEmployees(updated);
 
-    const emp = employees.find(e => e.iqamaNo === iqamaNo);
+    const emp = updated.find(e => e.iqamaNo === iqamaNo);
     if (emp) {
-      logActivity('update', `تحديث مستند انتهاء إقامة الجوازات لـ ${emp.name} إلى ميلادي: ${newDate}`);
+      try {
+        await fetch(`/api/employees?tenantId=${currentUser?.tenantId || ''}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(emp)
+        });
+        logActivity('update', `تحديث مستند انتهاء إقامة الجوازات لـ ${emp.name} إلى ميلادي: ${newDate}`);
+      } catch (err) {
+        console.error('API update employee expiry error:', err);
+      }
     }
   };
 
-  const handleRegisterPayment = (
+  const handleRegisterPayment = async (
     iqamaNo: string, 
     amount: number, 
     type: string, 
@@ -416,7 +712,7 @@ export default function App() {
       id: `pay_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
       iqamaNo,
       name: emp ? emp.name : 'موظف مجهول',
-      branch: emp ? emp.branch : branches[0],
+      branch: emp ? emp.branch : (branches[0] || 'فرع الرياض الأساسي'),
       amount,
       type,
       date: new Date().toISOString().slice(0, 10),
@@ -425,11 +721,20 @@ export default function App() {
       hijriYear: y
     };
 
-    savePayments([newPayment, ...payments]);
-    logActivity('pay', `تسجيل دفعة نقدية بقيمة ${amount.toLocaleString()} ريال للموظف ${emp?.name} — ببيان: ${type}`);
+    setPayments(prev => [newPayment, ...prev]);
+    try {
+      await fetch(`/api/payments?tenantId=${currentUser?.tenantId || ''}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newPayment)
+      });
+      logActivity('pay', `تسجيل دفعة نقدية بقيمة ${amount.toLocaleString()} ريال للموظف ${emp?.name} — ببيان: ${type}`);
+    } catch (err) {
+      console.error('API register payment error:', err);
+    }
   };
 
-  const handleAddKafalaOrder = (
+  const handleAddKafalaOrder = async (
     iqamaNo: string, 
     months: number, 
     notes?: string,
@@ -445,55 +750,84 @@ export default function App() {
       }
       return e;
     });
-    saveEmployees(updated);
+    setEmployees(updated);
 
-    const emp = employees.find(e => e.iqamaNo === iqamaNo);
+    const emp = updated.find(e => e.iqamaNo === iqamaNo);
     if (emp) {
-      const addedAmt = months * pricingSettings.kafala;
-      logActivity('update', `تسجيل قيد كفالة مستحقة بذمة ${emp.name} بعدد: ${months} أشهر بقيمة: ${addedAmt} ريال`);
-      alert(`✓ تم تسجيل ${months} أشهر كفالة إضافية ممددة على ذمة العامل ${emp.name}.`);
+      try {
+        await fetch(`/api/employees?tenantId=${currentUser?.tenantId || ''}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(emp)
+        });
+        const addedAmt = months * pricingSettings.kafala;
+        logActivity('update', `تسجيل قيد كفالة مستحقة بذمة ${emp.name} بعدد: ${months} أشهر بقيمة: ${addedAmt} ريال`);
+        alert(`✓ تم تسجيل ${months} أشهر كفالة إضافية ممددة على ذمة العامل ${emp.name}.`);
+      } catch (err) {
+        console.error('API add kafala order error:', err);
+      }
     }
   };
 
   // Clear Logs
-  const handleClearLogs = () => {
-    saveLogsList([]);
+  const handleClearLogs = async () => {
+    setLogs([]);
+    try {
+      await fetch(`/api/logs?tenantId=${currentUser?.tenantId || ''}`, {
+        method: 'DELETE'
+      });
+    } catch (err) {
+      console.error('API clear logs error:', err);
+    }
   };
 
-  // Demo state resetting to mock initials
-  const handleResetData = () => {
-    const tid = currentUser?.tenantId;
-    const empKey = tid ? `labor_${tid}_employees` : 'labor_employees';
-    const payKey = tid ? `labor_${tid}_payments` : 'labor_payments';
-    const branchKey = tid ? `labor_${tid}_branches` : 'labor_branches';
-    const logKey = tid ? `labor_${tid}_logs` : 'labor_logs';
-    const compKey = tid ? `labor_${tid}_company` : 'labor_company';
-    const pricKey = tid ? `labor_${tid}_pricing` : 'labor_pricing';
-
-    setEmployees(INITIAL_EMPLOYEES);
-    setPayments(INITIAL_PAYMENTS);
-    setBranches(tid ? [] : INITIAL_BRANCHES);
-    setLogs(INITIAL_LOGS);
-    
-    const defaultCompanyObj = { name: tid ? `لوحة حسابات ومساحة ${currentUser.name}` : 'مؤسسة الرواد لإدارة العمالة والتشغيل' };
-    const defaultPricingObj = { kafala: 250, iqama3: 3550, iqama6: 7100, iqama12: 14200, ramadanFree: true };
-    setCompanySettings(defaultCompanyObj);
-    setPricingSettings(defaultPricingObj);
-
-    localStorage.setItem(empKey, JSON.stringify(INITIAL_EMPLOYEES));
-    localStorage.setItem(payKey, JSON.stringify(INITIAL_PAYMENTS));
-    localStorage.setItem(branchKey, JSON.stringify(tid ? [] : INITIAL_BRANCHES));
-    localStorage.setItem(logKey, JSON.stringify(INITIAL_LOGS));
-    localStorage.setItem(compKey, JSON.stringify(defaultCompanyObj));
-    localStorage.setItem(pricKey, JSON.stringify(defaultPricingObj));
-
-    // Reset general users only for system administrators
-    if (!tid) {
-      setUsers(INITIAL_USERS);
-      localStorage.setItem('labor_users', JSON.stringify(INITIAL_USERS));
+  // Reset data to blank states on DB
+  const handleResetData = async () => {
+    const tid = currentUser?.tenantId || '';
+    try {
+      await fetch(`/api/system/wipe?tenantId=${tid}`, {
+        method: 'POST'
+      });
+      
+      setEmployees([]);
+      setPayments([]);
+      
+      const initialBrs = tid ? [] : INITIAL_BRANCHES;
+      setBranches(initialBrs);
+      await fetch(`/api/branches?tenantId=${tid}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(initialBrs)
+      });
+      
+      setLogs(INITIAL_LOGS);
+      await fetch(`/api/logs?tenantId=${tid}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(INITIAL_LOGS[0])
+      });
+      
+      const defaultCompanyObj = { name: tid ? `لوحة حسابات ومساحة ${currentUser.name}` : 'مؤسسة الرواد لإدارة العمالة والتشغيل' };
+      const defaultPricingObj = { kafala: 250, iqama3: 3550, iqama6: 7100, iqama12: 14200, ramadanFree: true };
+      setCompanySettings(defaultCompanyObj);
+      setPricingSettings(defaultPricingObj);
+      
+      await fetch(`/api/company-settings?tenantId=${tid}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(defaultCompanyObj)
+      });
+      
+      await fetch(`/api/pricing-settings?tenantId=${tid}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(defaultPricingObj)
+      });
+      
+      toastNotice('تم تصفير وإعادة تعيين قاعدة البيانات بنجاح!');
+    } catch (err) {
+      console.error('API reset data error:', err);
     }
-    
-    toastNotice('تم تصفير وإعادة تعيين قاعدة البيانات بنجاح!');
   };
 
   // Change simulation system role
@@ -617,40 +951,68 @@ export default function App() {
         return;
       }
       const loader = new FileReader();
-      loader.onload = (event) => {
+      loader.onload = async (event) => {
         const base64 = event.target?.result as string;
         const updated = { ...companySettings, logoBase64: base64 };
         setCompanySettings(updated);
-        const compKey = currentUser?.tenantId ? `labor_${currentUser.tenantId}_company` : 'labor_company';
-        localStorage.setItem(compKey, JSON.stringify(updated));
-        logActivity('update', 'تبديل وإدراج شعار رسمي جديد لهوية المؤسسة.');
-        alert('✓ تم حفظ الشعار الجديد المرفق بنجاح.');
+        try {
+          await fetch(`/api/company-settings?tenantId=${currentUser?.tenantId || ''}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updated)
+          });
+          logActivity('update', 'تبديل وإدراج شعار رسمي جديد لهوية المؤسسة.');
+          alert('✓ تم حفظ الشعار الجديد المرفق بنجاح.');
+        } catch (err) {
+          console.error('API save logo error:', err);
+        }
       };
       loader.readAsDataURL(file);
     }
   };
 
-  const handleClearCompanyLogo = () => {
+  const handleClearCompanyLogo = async () => {
     const updated = { ...companySettings, logoBase64: undefined };
     setCompanySettings(updated);
-    const compKey = currentUser?.tenantId ? `labor_${currentUser.tenantId}_company` : 'labor_company';
-    localStorage.setItem(compKey, JSON.stringify(updated));
-    logActivity('update', 'إزالة الشعار الرسمي المثبت والرجوع للشارة الكلاسيكية.');
-    alert('تم مسح الشعار المستورد بنجاح.');
+    try {
+      await fetch(`/api/company-settings?tenantId=${currentUser?.tenantId || ''}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updated)
+      });
+      logActivity('update', 'إزالة الشعار الرسمي المثبت والرجوع للشارة الكلاسيكية.');
+      alert('تم مسح الشعار المستورد بنجاح.');
+    } catch (err) {
+      console.error('API clear logo error:', err);
+    }
   };
 
-  const handleSaveCompanySettingsText = () => {
-    const compKey = currentUser?.tenantId ? `labor_${currentUser.tenantId}_company` : 'labor_company';
-    localStorage.setItem(compKey, JSON.stringify(companySettings));
-    logActivity('update', `تعديل المسمى التجاري للمنظومة ليصبح: ${companySettings.name}`);
-    alert('✓ تم حفظ مسمى الشركة الجديد.');
+  const handleSaveCompanySettingsText = async () => {
+    try {
+      await fetch(`/api/company-settings?tenantId=${currentUser?.tenantId || ''}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(companySettings)
+      });
+      logActivity('update', `تعديل المسمى التجاري للمنظومة ليصبح: ${companySettings.name}`);
+      alert('✓ تم حفظ مسمى الشركة الجديد.');
+    } catch (err) {
+      console.error('API save company name error:', err);
+    }
   };
 
-  const handleSavePricing = () => {
-    const pricKey = currentUser?.tenantId ? `labor_${currentUser.tenantId}_pricing` : 'labor_pricing';
-    localStorage.setItem(pricKey, JSON.stringify(pricingSettings));
-    logActivity('update', 'إعادة ضبط قواعد تسعيرة رسوم الكفالة وتجديدات رخص الإقامة بمشاركة المحاسب.');
-    alert('✓ تم حفظ قواعد الأسعار والرسوم بنجاح.');
+  const handleSavePricing = async () => {
+    try {
+      await fetch(`/api/pricing-settings?tenantId=${currentUser?.tenantId || ''}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(pricingSettings)
+      });
+      logActivity('update', 'إعادة ضبط قواعد تسعيرة رسوم الكفالة وتجديدات رخص الإقامة بمشاركة المحاسب.');
+      alert('✓ تم حفظ قواعد الأسعار والرسوم بنجاح.');
+    } catch (err) {
+      console.error('API save pricing error:', err);
+    }
   };
 
   // Dynamic alert totals calculated
@@ -685,6 +1047,8 @@ export default function App() {
         onRegisterSubmit={handleRegisterSubmit}
         companyName={companySettings.name}
         logoBase64={companySettings.logoBase64}
+        dbStatusInfo={dbStatusInfo}
+        onRefreshDbStatus={fetchDbStatus}
       />
     );
   }
@@ -733,11 +1097,22 @@ export default function App() {
               {activeTab === 'monthly' && 'التقارير والمقاصات المالية الشهرية'}
               {activeTab === 'archive' && 'شاشات الأرشيف والمسودات السابقة'}
               {activeTab === 'settings' && 'إعدادات المنظومة وصلاحيات الهوية'}
-              {activeTab === 'help' && 'أوراق استشارة الديكري والتركيب المحلي'}
+              {activeTab === 'docker' && 'تبويب الدوكر ومعالج اتصال قاعدة البيانات'}
             </h2>
           </div>
 
           <div className="flex items-center gap-2">
+            {dbStatusInfo?.status === 'connected' ? (
+              <span className="text-[10px] bg-emerald-50 text-emerald-850 px-2.5 py-1.5 rounded-xl border border-emerald-100/50 font-black flex items-center gap-1 select-none">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                قاعدة البيانات: متصلة ✅
+              </span>
+            ) : (
+              <span className="text-[10px] bg-rose-50 text-rose-850 px-2.5 py-1.5 rounded-xl border border-rose-100/50 font-black flex items-center gap-1 select-none">
+                <span className="w-2 h-2 rounded-full bg-rose-500"></span>
+                قاعدة البيانات: منفصلة ❌ (ذاكرة مؤقتة)
+              </span>
+            )}
             <span className="text-[10px] bg-sky-50 text-sky-850 px-2.5 py-1.5 rounded-xl border border-sky-100/50 font-black">
               رتبة التصفّح: {currentUser.role === 'admin' ? 'المدير العام 💻' : (currentUser.role === 'branch' ? `مشرف ${currentUser.branch}` : 'مُشاهد 👁️')}
             </span>
@@ -746,6 +1121,65 @@ export default function App() {
 
         {/* 3. Main Central App Area */}
         <main className="flex-grow p-4 md:p-6 lg:p-8 bg-[#f4f7fc]/50">
+
+          {/* Local Storage Migration Banner */}
+          {hasLocalData && currentUser.role === 'admin' && (
+            <div className="mb-6 p-5 bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200/60 rounded-2xl shadow-sm text-slate-800 space-y-3">
+              <div className="flex items-start gap-3">
+                <span className="text-2xl mt-0.5">📌</span>
+                <div>
+                  <h4 className="font-extrabold text-sm text-amber-900">تم الكشف عن بيانات محلية سابقة مخزنة في متصفحك الحالي!</h4>
+                  <p className="text-xs text-amber-800 mt-1 leading-relaxed">
+                    اكتشف النظام وجود ملفات عمالة وسجلات دفعات مالية قديمة مخزنة محلياً في ذاكرة التخزين المؤقت للمتصفح (LocalStorage). 
+                    لضمان عدم ضياع هذه البيانات، يمكنك ترحيلها (رفعها) بضغطة واحدة لتخزينها بشكل دائم في قاعدة البيانات الجديدة على السيرفر.
+                  </p>
+                </div>
+              </div>
+
+              {migrationStatus === 'idle' && (
+                <button
+                  onClick={runMigration}
+                  className="px-4 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-black transition-all shadow-md cursor-pointer flex items-center gap-1.5"
+                >
+                  <Upload className="w-4 h-4" />
+                  بدء ترحيل ونقل كافة البيانات إلى السيرفر ⚡
+                </button>
+              )}
+
+              {migrationStatus === 'migrating' && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-xs font-bold text-amber-950">
+                    <RefreshCw className="w-4 h-4 animate-spin text-amber-700" />
+                    جاري رفع وترحيل السجلات إلى السيرفر الآن... يرجى عدم إغلاق الصفحة.
+                  </div>
+                  <div className="max-h-28 overflow-y-auto bg-amber-950/5 p-3 rounded-lg border border-amber-950/10 font-mono text-[10px] text-amber-900 space-y-1" dir="ltr">
+                    {migrationLog.map((l, i) => (
+                      <div key={i}>{l}</div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {migrationStatus === 'success' && (
+                <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-xs font-bold">
+                  ✅ تم ترحيل ونقل كافة البيانات بنجاح تام! يرجى إعادة تحميل الشاشة لتحديث الإحصائيات.
+                </div>
+              )}
+
+              {migrationStatus === 'error' && (
+                <div className="space-y-2">
+                  <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-lg text-xs font-bold">
+                    ❌ فشل ترحيل البيانات. يرجى التحقق من اتصال قاعدة البيانات في لوحة الإعدادات والمحاولة لاحقاً.
+                  </div>
+                  <div className="max-h-24 overflow-y-auto bg-rose-950/5 p-2 rounded-lg border border-rose-950/10 font-mono text-[10px] text-rose-900 space-y-1" dir="ltr">
+                    {migrationLog.map((l, i) => (
+                      <div key={i}>{l}</div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           
           {/* 🌟 Professional Glassmorphic Content Panel with Custom Shadow & Padding 🌟 */}
           <div className="flex flex-col gap-6 p-5 md:p-7 bg-white rounded-3xl border border-slate-200/50 shadow-[0_15px_45px_0_rgba(11,40,68,0.06),0_2px_8px_-2px_rgba(0,0,0,0.015)] min-w-0 transition-all duration-300">
@@ -913,7 +1347,7 @@ export default function App() {
                   
                   {/* Grid forms settings */}
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    
+
                     {/* Identity settings card */}
                     <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-4">
                       <div className="border-b border-slate-100 pb-2">
@@ -1213,8 +1647,82 @@ export default function App() {
               )}
 
               {/* Tab: Local Server integration guide */}
-              {activeTab === 'help' && currentUser.email === 'shady.nasif@gmail.com' && (
-                <LocalSetupGuide />
+              {activeTab === 'docker' && currentUser.email === 'shady.nasif@gmail.com' && (
+                <div className="space-y-6">
+                  {/* Database Status Diagnostics Card */}
+                  <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-4">
+                    <div className="flex justify-between items-start border-b border-slate-100 pb-3">
+                      <div>
+                        <h4 className="font-extrabold text-xs uppercase tracking-wider text-slate-400 block mb-1">اتصال السيرفر</h4>
+                        <h3 className="font-black text-sm text-slate-800 font-sans">حالة الربط مع قاعدة البيانات (MariaDB / MySQL)</h3>
+                      </div>
+                      {dbStatusInfo === null ? (
+                        <span className="px-3 py-1 bg-amber-100 text-amber-800 border border-amber-200 text-xs rounded-xl font-black flex items-center gap-1.5">
+                          <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping"></span>
+                          جاري الاتصال بالسيرفر... 🔄
+                        </span>
+                      ) : dbStatusInfo.status === 'connected' ? (
+                        <span className="px-3 py-1 bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs rounded-xl font-black flex items-center gap-1.5">
+                          <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                          نشط ومتصل ✅
+                        </span>
+                      ) : (
+                        <span className="px-3 py-1 bg-rose-100 text-rose-850 border border-rose-200 text-xs rounded-xl font-black flex items-center gap-1.5">
+                          <span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
+                          منفصل (يعمل محلياً) ❌
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
+                      <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl space-y-1">
+                        <span className="text-slate-400 font-extrabold">عنوان السيرفر (Host)</span>
+                        <p className="font-black text-slate-800 font-mono select-all">{dbStatusInfo ? dbStatusInfo.host : 'جاري التحميل...'}</p>
+                      </div>
+                      <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl space-y-1">
+                        <span className="text-slate-400 font-extrabold">المنفذ (Port)</span>
+                        <p className="font-black text-slate-800 font-mono select-all">{dbStatusInfo ? dbStatusInfo.port : 'جاري التحميل...'}</p>
+                      </div>
+                      <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl space-y-1">
+                        <span className="text-slate-400 font-extrabold">مستخدم القاعدة</span>
+                        <p className="font-black text-slate-800 font-mono select-all">{dbStatusInfo ? dbStatusInfo.user : 'جاري التحميل...'}</p>
+                      </div>
+                      <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl space-y-1">
+                        <span className="text-slate-400 font-extrabold">اسم قاعدة البيانات</span>
+                        <p className="font-black text-slate-800 font-mono select-all">{dbStatusInfo ? dbStatusInfo.database : 'جاري التحميل...'}</p>
+                      </div>
+                    </div>
+
+                    {dbStatusInfo === null && (
+                      <div className="p-4 bg-amber-50 border border-amber-100 rounded-xl text-xs font-bold text-amber-800 leading-relaxed flex items-center gap-2">
+                        <span className="text-lg">🔄</span>
+                        <span>جاري الاتصال بالسيرفر الخلفي (API) لقراءة معلومات الربط مع قاعدة البيانات... يرجى الانتظار بضع ثوانٍ.</span>
+                      </div>
+                    )}
+
+                    {dbStatusInfo?.error && (
+                      <div className="p-4 bg-rose-50 border border-rose-100 rounded-xl space-y-2">
+                        <div className="flex items-center gap-1.5 font-bold text-rose-850 text-xs">
+                          <span className="text-lg">⚠️</span>
+                          تفاصيل خطأ الاتصال المرسل من السيرفر:
+                        </div>
+                        <p className="font-mono text-[11px] text-rose-800 bg-white/50 p-2.5 rounded border border-rose-100 leading-relaxed overflow-x-auto select-all" dir="ltr">
+                          {dbStatusInfo.error}
+                        </p>
+                        <div className="text-[11px] text-rose-700/80 leading-relaxed">
+                          💡 <strong>كيف تصلح هذا الخطأ؟</strong> تأكد من صحة البيانات التي أدخلتها في نافذة المتغيرات (Environment Variables) في لوحة التحكم الجانبية لـ AI Studio. تأكد من أن السيرفر المنزلي يعمل، والمنفذ 3306 مفتوح للاتصالات الخارجية، وأن المستخدم لديه كامل الصلاحيات لإنشاء الجداول والاتصال عن بُعد.
+                        </div>
+                      </div>
+                    )}
+
+                    {dbStatusInfo?.status === 'connected' && (
+                      <div className="p-3.5 bg-emerald-50 border border-emerald-100 rounded-xl text-xs font-bold text-emerald-800/90 leading-relaxed flex items-center gap-2">
+                        <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
+                        <span>المنظومة الآن مرتبطة بشكل كامل وآمن بسيرفر MariaDB المنزلي. جميع الإجراءات، الموظفين، القيود المالية، والدفعات يتم ترحيلها وحفظها بشكل فوري ومستقر في قاعدة البيانات المركزية.</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
               )}
             </>
           )}
