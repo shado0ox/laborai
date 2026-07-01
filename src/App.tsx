@@ -12,9 +12,12 @@ import EmployeeListView from './components/EmployeeListView';
 import AlertsListView from './components/AlertsListView';
 import PaymentsListView from './components/PaymentsListView';
 import MonthlyFinanceView from './components/MonthlyFinanceView';
+import GeneralLedgerView from './components/GeneralLedgerView';
 import LedgerStatement from './components/LedgerStatement';
 import PortalAuthView from './components/PortalAuthView';
 import PortalApprovalsView from './components/PortalApprovalsView';
+import PortalSpacesView from './components/PortalSpacesView';
+import PortalDevPanelView from './components/PortalDevPanelView';
 
 import { 
   Menu, X, Sliders, RefreshCw, Upload, Building, Trash2, CheckCircle2 
@@ -29,7 +32,7 @@ export default function App() {
   const [users, setUsers] = useState<UserProfile[]>([]);
   
   const [companySettings, setCompanySettings] = useState<CompanySettings>({
-    name: 'مؤسسة الرواد لإدارة العمالة والتشغيل'
+    name: 'برنامج إدارة العمالة المهنية'
   });
   const [pricingSettings, setPricingSettings] = useState<PricingSettings>({
     kafala: 250,
@@ -75,7 +78,7 @@ export default function App() {
         setDbStatusInfo(data);
       }
     } catch (e) {
-      console.error('Failed to fetch db status:', e);
+      console.warn('Failed to fetch db status (this is normal if server is booting or offline):', e);
     }
   };
 
@@ -248,9 +251,12 @@ export default function App() {
         if (storedCurrentUser) {
           const u = JSON.parse(storedCurrentUser) as UserProfile;
           setCurrentUser(u);
+          if (u.email === 'shady.nasif@gmail.com') {
+            setActiveTab('dev_panel');
+          }
         }
       } catch (e) {
-        console.error('API global boot error:', e);
+        console.warn('API global boot error (offline fallback used):', e);
         setUsers(INITIAL_USERS);
       }
     }
@@ -326,7 +332,7 @@ export default function App() {
           setPricingSettings(data);
         }
       } catch (err) {
-        console.error('API tenant load error, using fallback states', err);
+        console.warn('API tenant load error, using fallback states (this is normal if server is booting or offline):', err);
       }
     }
     loadTenantData();
@@ -427,7 +433,11 @@ export default function App() {
   const handleLoginSuccess = (user: UserProfile) => {
     setCurrentUser(user);
     localStorage.setItem('labor_current_user', JSON.stringify(user));
-    setActiveTab('dashboard');
+    if (user.email === 'shady.nasif@gmail.com') {
+      setActiveTab('dev_panel');
+    } else {
+      setActiveTab('dashboard');
+    }
   };
 
   const handleRegisterSubmit = async (newUser: UserProfile) => {
@@ -471,7 +481,12 @@ export default function App() {
   };
 
   const handleDeleteUser = async (uid: string) => {
-    const uName = users.find(u => u.uid === uid)?.name || 'مستخدم';
+    const targetUser = users.find(u => u.uid === uid);
+    if (targetUser?.email === 'shady.nasif@gmail.com') {
+      toastNotice('⚠️ خطأ: لا يمكن حذف حساب مطور البرنامج الرئيسي!');
+      return;
+    }
+    const uName = targetUser?.name || 'مستخدم';
     const updated = users.filter(u => u.uid !== uid);
     setUsers(updated);
     try {
@@ -807,7 +822,7 @@ export default function App() {
         body: JSON.stringify(INITIAL_LOGS[0])
       });
       
-      const defaultCompanyObj = { name: tid ? `لوحة حسابات ومساحة ${currentUser.name}` : 'مؤسسة الرواد لإدارة العمالة والتشغيل' };
+      const defaultCompanyObj = { name: tid ? `لوحة حسابات ومساحة ${currentUser.name}` : 'برنامج إدارة العمالة المهنية' };
       const defaultPricingObj = { kafala: 250, iqama3: 3550, iqama6: 7100, iqama12: 14200, ramadanFree: true };
       setCompanySettings(defaultCompanyObj);
       setPricingSettings(defaultPricingObj);
@@ -918,7 +933,7 @@ export default function App() {
   };
 
   // Add mock profile security users
-  const handleAddUser = (e: React.FormEvent) => {
+  const handleAddUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newUserName.trim() || !newUserEmail.trim()) return;
     
@@ -928,14 +943,27 @@ export default function App() {
       email: newUserEmail.trim(),
       role: newUserRole,
       branch: newUserRole === 'branch' ? newUserBranch || branches[0] : undefined,
+      status: 'approved',
+      tenantId: currentUser?.tenantId || 'main',
       createdAt: new Date().toISOString()
     };
 
     saveUsersList([...users, newUser]);
     setNewUserName('');
     setNewUserEmail('');
-    logActivity('update', `دعوة وتسجيل مستخدم برتبة صلاحية جديدة: ${newUserName} (${newUserRole})`);
-    alert('✓ تمت إضافة المستخدم لقائمة الصلاحيات والترخيص بنجاح.');
+    
+    try {
+      await fetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newUser)
+      });
+      logActivity('update', `دعوة وتسجيل مستخدم برتبة صلاحية جديدة: ${newUserName} (${newUserRole})`);
+      toastNotice('✓ تمت إضافة المستخدم لقائمة الصلاحيات وحفظه بقاعدة البيانات بنجاح.');
+    } catch (err) {
+      console.error('API save user error:', err);
+      toastNotice('⚠️ خطأ في حفظ بيانات المستخدم الجديد بالسيرفر.');
+    }
   };
 
   const toastNotice = (msg: string) => {
@@ -994,8 +1022,8 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(companySettings)
       });
-      logActivity('update', `تعديل المسمى التجاري للمنظومة ليصبح: ${companySettings.name}`);
-      alert('✓ تم حفظ مسمى الشركة الجديد.');
+      logActivity('update', `تعديل إعدادات وهوية المؤسسة (المسمى: ${companySettings.name}، صلاحية الكشف للموظفين: ${companySettings.allowLedgerForUsers ? 'مسموح' : 'غير مسموح'}).`);
+      alert('✓ تم حفظ إعدادات وهوية المؤسسة بنجاح.');
     } catch (err) {
       console.error('API save company name error:', err);
     }
@@ -1039,6 +1067,18 @@ export default function App() {
     return expiryCount + debtCount;
   };
 
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const isSubscriptionExpired = companySettings.expirationDate 
+    ? (companySettings.expirationDate < todayStr) 
+    : false;
+
+  let subscriptionDaysRemaining: number | null = null;
+  if (companySettings.expirationDate) {
+    const diffTime = new Date(companySettings.expirationDate).getTime() - new Date(todayStr).getTime();
+    subscriptionDaysRemaining = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  }
+  const isSubscriptionNearExpiration = subscriptionDaysRemaining !== null && subscriptionDaysRemaining > 0 && subscriptionDaysRemaining <= 30;
+
   if (!currentUser) {
     return (
       <PortalAuthView 
@@ -1050,6 +1090,58 @@ export default function App() {
         dbStatusInfo={dbStatusInfo}
         onRefreshDbStatus={fetchDbStatus}
       />
+    );
+  }
+
+  // Suspended subscription check: developer is immune
+  if (isSubscriptionExpired && currentUser.email !== 'shady.nasif@gmail.com') {
+    return (
+      <div className="min-h-screen bg-[#071329] flex flex-col justify-center items-center p-6 text-center text-white font-sans" id="subscription-suspended-screen">
+        <div className="max-w-md bg-white/5 backdrop-blur-lg rounded-3xl p-8 border border-white/10 shadow-2xl space-y-6 animate-fade-in">
+          <div className="w-20 h-20 bg-rose-500/10 text-rose-500 rounded-full flex items-center justify-center mx-auto border border-rose-500/20">
+            <span className="text-4xl">⚠️</span>
+          </div>
+          
+          <div className="space-y-2">
+            <h1 className="text-2xl font-black tracking-tight text-white">عذراً، تم تعليق الخدمة لانتهاء الاشتراك!</h1>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              انتهت فترة الترخيص والاشتراك السنوي لمساحة العمل الخاصة بكم بتاريخ:
+              <span className="font-mono font-bold text-amber-400 block text-sm mt-1">{companySettings.expirationDate}</span>
+            </p>
+          </div>
+
+          <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-2xl text-amber-300 text-xs font-bold leading-relaxed">
+            تم تعليق الوصول لبيانات المساحة بشكل مؤقت. يرجى التواصل مع الإدارة أو مطور البرنامج لتجديد الاشتراك السنوي وتفعيل الخدمة دون فقدان أي من بياناتكم أو ملفاتكم.
+          </div>
+
+          {companySettings.supportPhone && (
+            <div className="space-y-2">
+              <span className="text-xs text-slate-400 block font-bold">هاتف التواصل المباشر مع المطور للتجديد:</span>
+              <a 
+                href={`tel:${companySettings.supportPhone}`} 
+                className="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2.5 rounded-xl font-bold text-xs transition-all shadow-md select-all"
+              >
+                <span>📞 {companySettings.supportPhone}</span>
+              </a>
+            </div>
+          )}
+
+          <div className="pt-2 border-t border-white/5">
+            <button
+              onClick={() => {
+                localStorage.removeItem('portal_user');
+                window.location.reload();
+              }}
+              className="text-xs font-bold text-slate-400 hover:text-white transition-colors underline cursor-pointer"
+            >
+              تسجيل الخروج أو تبديل الحساب
+            </button>
+          </div>
+        </div>
+        <div className="mt-8 text-[10px] text-slate-500">
+          بوابة إدارة العمالة والتعاقدات • جميع البيانات محفوظة ومحمية تماماً
+        </div>
+      </div>
     );
   }
 
@@ -1074,6 +1166,7 @@ export default function App() {
         onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
         onLogout={handleLogout}
         pendingUsersCount={users.filter(u => u.status === 'pending').length}
+        allowLedgerForUsers={companySettings.allowLedgerForUsers}
       />
 
       {/* 2. Primary Layout Shell Area */}
@@ -1102,16 +1195,18 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2">
-            {dbStatusInfo?.status === 'connected' ? (
-              <span className="text-[10px] bg-emerald-50 text-emerald-850 px-2.5 py-1.5 rounded-xl border border-emerald-100/50 font-black flex items-center gap-1 select-none">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                قاعدة البيانات: متصلة ✅
-              </span>
-            ) : (
-              <span className="text-[10px] bg-rose-50 text-rose-850 px-2.5 py-1.5 rounded-xl border border-rose-100/50 font-black flex items-center gap-1 select-none">
-                <span className="w-2 h-2 rounded-full bg-rose-500"></span>
-                قاعدة البيانات: منفصلة ❌ (ذاكرة مؤقتة)
-              </span>
+            {currentUser.email === 'shady.nasif@gmail.com' && (
+              dbStatusInfo?.status === 'connected' ? (
+                <span className="text-[10px] bg-emerald-50 text-emerald-850 px-2.5 py-1.5 rounded-xl border border-emerald-100/50 font-black flex items-center gap-1 select-none">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                  قاعدة البيانات: متصلة ✅
+                </span>
+              ) : (
+                <span className="text-[10px] bg-rose-50 text-rose-850 px-2.5 py-1.5 rounded-xl border border-rose-100/50 font-black flex items-center gap-1 select-none">
+                  <span className="w-2 h-2 rounded-full bg-rose-500"></span>
+                  قاعدة البيانات: منفصلة ❌ (ذاكرة مؤقتة)
+                </span>
+              )
             )}
             <span className="text-[10px] bg-sky-50 text-sky-850 px-2.5 py-1.5 rounded-xl border border-sky-100/50 font-black">
               رتبة التصفّح: {currentUser.role === 'admin' ? 'المدير العام 💻' : (currentUser.role === 'branch' ? `مشرف ${currentUser.branch}` : 'مُشاهد 👁️')}
@@ -1121,6 +1216,31 @@ export default function App() {
 
         {/* 3. Main Central App Area */}
         <main className="flex-grow p-4 md:p-6 lg:p-8 bg-[#f4f7fc]/50">
+
+          {/* Subscription Warning Banner (Warns 30 days before expiration) */}
+          {isSubscriptionNearExpiration && currentUser.email !== 'shady.nasif@gmail.com' && (
+            <div className="mb-6 p-4 bg-gradient-to-r from-amber-50 to-amber-100/60 border border-amber-200 rounded-2xl shadow-sm text-slate-800 flex flex-col md:flex-row items-center justify-between gap-3 animate-pulse" id="subscription-warning-banner">
+              <div className="flex items-start gap-3">
+                <span className="text-2xl mt-0.5">⏳</span>
+                <div className="space-y-0.5">
+                  <h4 className="font-extrabold text-xs text-amber-900">تنبيه بقرب انتهاء ترخيص الخدمة للمنشأة!</h4>
+                  <p className="text-[11px] text-amber-850 font-medium leading-relaxed">
+                    متبقي على تاريخ انتهاء اشتراك مساحة العمل الخاصة بكم <span className="font-extrabold text-rose-700">{subscriptionDaysRemaining} يوم فقط</span> (ينتهي بتاريخ: <span className="font-mono font-bold text-slate-900">{companySettings.expirationDate}</span>). 
+                    يرجى التنسيق والتواصل لتجديد الاشتراك السنوي تجنباً لأي تعليق مؤقت للخدمة.
+                  </p>
+                </div>
+              </div>
+              {companySettings.supportPhone && (
+                <a 
+                  href={`tel:${companySettings.supportPhone}`}
+                  className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold transition-colors shadow-sm shrink-0 flex items-center gap-1.5"
+                >
+                  <span>📞 اتصل للتجديد:</span>
+                  <span className="font-mono font-bold">{companySettings.supportPhone}</span>
+                </a>
+              )}
+            </div>
+          )}
 
           {/* Local Storage Migration Banner */}
           {hasLocalData && currentUser.role === 'admin' && (
@@ -1226,13 +1346,42 @@ export default function App() {
               )}
 
               {/* Tab: Approvals */}
-              {activeTab === 'approvals' && currentUser.role === 'admin' && (
+              {activeTab === 'approvals' && currentUser.email === 'shady.nasif@gmail.com' && (
                 <PortalApprovalsView 
                   users={users}
                   onUpdateUserStatus={handleUpdateUserStatus}
                   onDeleteUser={handleDeleteUser}
                   onUpdateUserRole={handleUpdateUserRole}
                   branches={branches}
+                />
+              )}
+
+              {/* Tab: System Developer Panel */}
+              {activeTab === 'dev_panel' && currentUser.email === 'shady.nasif@gmail.com' && (
+                <PortalDevPanelView
+                  currentUser={currentUser}
+                  users={users}
+                  dbStatusInfo={dbStatusInfo}
+                  onRefreshDbStatus={fetchDbStatus}
+                  toastNotice={toastNotice}
+                />
+              )}
+
+              {/* Tab: Subscriber Spaces Management */}
+              {activeTab === 'spaces' && currentUser.email === 'shady.nasif@gmail.com' && (
+                <PortalSpacesView
+                  currentUser={currentUser}
+                  users={users}
+                  onUpdateUserStatus={handleUpdateUserStatus}
+                  onDeleteUser={handleDeleteUser}
+                  toastNotice={toastNotice}
+                  onRefreshUsers={async () => {
+                    const res = await fetch('/api/users');
+                    if (res.ok) {
+                      const data = await res.json();
+                      setUsers(data);
+                    }
+                  }}
                 />
               )}
 
@@ -1282,6 +1431,16 @@ export default function App() {
               {/* Tab: Monthly analytics */}
               {activeTab === 'monthly' && (
                 <MonthlyFinanceView payments={payments} />
+              )}
+
+              {/* Tab: General Ledger Statement (Receipts and Expenses Ledger) */}
+              {activeTab === 'general_ledger' && (currentUser.role === 'admin' || companySettings.allowLedgerForUsers) && (
+                <GeneralLedgerView 
+                  payments={payments}
+                  currentUser={currentUser}
+                  companyName={companySettings.name}
+                  logoBase64={companySettings.logoBase64}
+                />
               )}
 
               {/* Tab: Archive deactivated workers */}
@@ -1398,11 +1557,24 @@ export default function App() {
                           </div>
                         </div>
 
+                        <div className="pt-2 pb-2 border-t border-slate-100 flex items-center gap-2 select-none cursor-pointer">
+                          <input 
+                            type="checkbox"
+                            id="allowLedgerForUsers"
+                            checked={!!companySettings.allowLedgerForUsers}
+                            onChange={(e) => setCompanySettings({ ...companySettings, allowLedgerForUsers: e.target.checked })}
+                            className="w-4 h-4 rounded text-primary focus:ring-primary cursor-pointer"
+                          />
+                          <label htmlFor="allowLedgerForUsers" className="cursor-pointer text-slate-800 font-bold text-xs select-none">
+                            السماح للمستخدمين (مسؤولي الفروع والمشاهدين) بالوصول لكشف الحساب العام للمنشأة
+                          </label>
+                        </div>
+
                         <button 
                           onClick={handleSaveCompanySettingsText}
                           className="btn btn-primary text-xs w-full py-2"
                         >
-                          حفظ هوية المؤسسة
+                          حفظ هوية وإعدادات المؤسسة
                         </button>
                       </div>
                     </div>
@@ -1535,7 +1707,14 @@ export default function App() {
                             </tr>
                           </thead>
                           <tbody>
-                            {users.map(u => (
+                            {users.filter(u => {
+                              if (currentUser.email === 'shady.nasif@gmail.com') {
+                                // مطور البرنامج يرى فقط مدراء المساحات (المدراء الرئيسيين) ولا يرى المساعدين أو المشرفين الفرعيين
+                                return u.role === 'admin';
+                              }
+                              if (u.email === 'shady.nasif@gmail.com') return false;
+                              return !currentUser.tenantId || u.tenantId === currentUser.tenantId;
+                            }).map(u => (
                               <tr key={u.uid} className="border-b border-slate-100">
                                 <td className="py-2.5">
                                   <div>{u.name}</div>
@@ -1654,7 +1833,7 @@ export default function App() {
                     <div className="flex justify-between items-start border-b border-slate-100 pb-3">
                       <div>
                         <h4 className="font-extrabold text-xs uppercase tracking-wider text-slate-400 block mb-1">اتصال السيرفر</h4>
-                        <h3 className="font-black text-sm text-slate-800 font-sans">حالة الربط مع قاعدة البيانات (MariaDB / MySQL)</h3>
+                        <h3 className="font-black text-sm text-slate-800 font-sans">حالة الربط مع قاعدة البيانات (PostgreSQL)</h3>
                       </div>
                       {dbStatusInfo === null ? (
                         <span className="px-3 py-1 bg-amber-100 text-amber-800 border border-amber-200 text-xs rounded-xl font-black flex items-center gap-1.5">
@@ -1710,7 +1889,7 @@ export default function App() {
                           {dbStatusInfo.error}
                         </p>
                         <div className="text-[11px] text-rose-700/80 leading-relaxed">
-                          💡 <strong>كيف تصلح هذا الخطأ؟</strong> تأكد من صحة البيانات التي أدخلتها في نافذة المتغيرات (Environment Variables) في لوحة التحكم الجانبية لـ AI Studio. تأكد من أن السيرفر المنزلي يعمل، والمنفذ 3306 مفتوح للاتصالات الخارجية، وأن المستخدم لديه كامل الصلاحيات لإنشاء الجداول والاتصال عن بُعد.
+                          💡 <strong>كيف تصلح هذا الخطأ؟</strong> تأكد من صحة البيانات التي أدخلتها في نافذة المتغيرات (Environment Variables) في لوحة التحكم الجانبية لـ AI Studio. تأكد من أن السيرفر المركزي يعمل، والمنفذ 5432 مفتوح للاتصالات الخارجية، وأن المستخدم لديه كامل الصلاحيات لإنشاء الجداول والاتصال عن بُعد.
                         </div>
                       </div>
                     )}
@@ -1718,7 +1897,7 @@ export default function App() {
                     {dbStatusInfo?.status === 'connected' && (
                       <div className="p-3.5 bg-emerald-50 border border-emerald-100 rounded-xl text-xs font-bold text-emerald-800/90 leading-relaxed flex items-center gap-2">
                         <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
-                        <span>المنظومة الآن مرتبطة بشكل كامل وآمن بسيرفر MariaDB المنزلي. جميع الإجراءات، الموظفين، القيود المالية، والدفعات يتم ترحيلها وحفظها بشكل فوري ومستقر في قاعدة البيانات المركزية.</span>
+                        <span>المنظومة الآن مرتبطة بشكل كامل وآمن بسيرفر PostgreSQL المركزي. جميع الإجراءات، الموظفين، القيود المالية، والدفعات يتم ترحيلها وحفظها بشكل فوري ومستقر في قاعدة البيانات المركزية.</span>
                       </div>
                     )}
                   </div>

@@ -67,6 +67,10 @@ export interface PricingSettings {
 export interface CompanySettings {
   name: string;
   logoBase64?: string;
+  allowLedgerForUsers?: boolean;
+  activationDate?: string;
+  expirationDate?: string;
+  supportPhone?: string;
 }
 
 export interface UserProfile {
@@ -88,3 +92,14 @@ export interface ActivityLog {
   user: string;
   time: string;
 }
+
+export interface GeneralLedgerEntry {
+  id: string;
+  date: string; // YYYY-MM-DD
+  bayan: string;
+  debit: number; // صادر (مصاريف / مدين)
+  credit: number; // وارد (مقبوضات / دائن)
+  createdAt?: string;
+  tenantId?: string;
+}
+

@@ -1,7 +1,8 @@
 import React from 'react';
 import { 
   BarChart3, Users, AlertTriangle, Coins, CalendarDays, 
-  Archive, Settings, HelpCircle, LogOut, ShieldAlert, Building, ShieldCheck
+  Archive, Settings, HelpCircle, LogOut, ShieldAlert, Building, ShieldCheck,
+  ArrowLeftRight
 } from 'lucide-react';
 import { UserProfile } from '../types';
 
@@ -19,6 +20,7 @@ interface SidebarMenuProps {
   onToggleSidebar: () => void;
   onLogout: () => void;
   pendingUsersCount: number;
+  allowLedgerForUsers?: boolean;
 }
 
 export default function SidebarMenu({
@@ -34,7 +36,8 @@ export default function SidebarMenu({
   isSidebarOpen,
   onToggleSidebar,
   onLogout,
-  pendingUsersCount
+  pendingUsersCount,
+  allowLedgerForUsers = false
 }: SidebarMenuProps) {
   
   const guestRoleLabels = {
@@ -43,7 +46,9 @@ export default function SidebarMenu({
     viewer: 'مشاهد (قراءة فقط)'
   };
 
-  const navItems = [
+  const showLedger = currentUser.role === 'admin' || !!allowLedgerForUsers;
+
+  const baseNavItems = [
     { id: 'dashboard', label: 'لوحة المتابعة', icon: <BarChart3 className="w-5 h-5" />, section: 'الرئيسية' },
     { 
       id: 'employees', 
@@ -52,14 +57,6 @@ export default function SidebarMenu({
       badge: totalEmployeesCount,
       section: 'الرئيسية' 
     },
-    ...(currentUser.role === 'admin' ? [{
-      id: 'approvals',
-      label: 'طلبات التسجيل بالبوابة',
-      icon: <ShieldCheck className="w-5 h-5" />,
-      badge: pendingUsersCount,
-      badgeColor: 'bg-amber-500 text-white animate-pulse',
-      section: 'الرئيسية'
-    }] : []),
     { 
       id: 'alerts', 
       label: 'التنبيهات العاجلة', 
@@ -69,13 +66,25 @@ export default function SidebarMenu({
       section: 'الرئيسية' 
     },
     { id: 'payments', label: 'سجل المقبوضات والمدفوعات', icon: <Coins className="w-5 h-5" />, section: 'المالية' },
+    ...(showLedger ? [{ id: 'general_ledger', label: 'كشف الوارد والصادر العام', icon: <ArrowLeftRight className="w-5 h-5" />, section: 'المالية' }] : []),
     { id: 'monthly', label: 'التقرير الهجري المالي', icon: <CalendarDays className="w-5 h-5" />, section: 'المالية' },
     { id: 'archive', label: 'الأرشيف والمستبعدين', icon: <Archive className="w-5 h-5" />, section: 'قواعد البيانات' },
-    { id: 'settings', label: 'هوية الشركة والأسعار', icon: <Settings className="w-5 h-5" />, section: 'الإدارة العامة' },
-    ...(currentUser.email === 'shady.nasif@gmail.com' ? [
-      { id: 'docker', label: 'تبويب الدوكر ومعالج الاتصال', icon: <HelpCircle className="w-5 h-5" />, section: 'الإعادة والدعم' }
-    ] : [])
+    { id: 'settings', label: 'هوية الشركة والأسعار', icon: <Settings className="w-5 h-5" />, section: 'الإدارة العامة' }
   ];
+
+  const navItems = currentUser.email === 'shady.nasif@gmail.com' ? [
+    { id: 'dev_panel', label: 'لوحة مطور النظام', icon: <BarChart3 className="w-5 h-5" />, section: 'لوحة التحكم للمطور' },
+    { 
+      id: 'approvals', 
+      label: 'طلبات التسجيل بالبوابة', 
+      icon: <ShieldCheck className="w-5 h-5" />, 
+      badge: pendingUsersCount,
+      badgeColor: 'bg-amber-500 text-white animate-pulse',
+      section: 'لوحة التحكم للمطور' 
+    },
+    { id: 'spaces', label: 'إدارة مساحات المشتركين', icon: <Building className="w-5 h-5" />, section: 'لوحة التحكم للمطور' },
+    { id: 'docker', label: 'تبويب الدوكر ومعالج الاتصال', icon: <HelpCircle className="w-5 h-5" />, section: 'الصيانة والتشخيص' }
+  ] : baseNavItems;
 
   const groupedNav: Record<string, typeof navItems> = {};
   navItems.forEach(item => {

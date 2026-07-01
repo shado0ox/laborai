@@ -1,6 +1,6 @@
 {
   "name": "نظام إدارة ومتابعة العمالة",
-  "description": "نظام متكامل لإدارة ومتابعة العمالة والمدفوعات والتقارير ومزامنتها مع قاعدة بيانات MariaDB السحابية والمحلية.",
+  "description": "نظام متكامل لإدارة ومتابعة العمالة والمدفوعات والتقارير ومزامنتها مع قاعدة بيانات PostgreSQL مع فصل بوابات المشرفين والمطور الرئيسي.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

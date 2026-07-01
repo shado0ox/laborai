@@ -27,6 +27,9 @@ export default function PortalApprovalsView({
     // Exclude the default program manager so they don't accidentally edit or delete themselves
     if (u.email === 'shady.nasif@gmail.com') return false;
 
+    // مطور البرنامج يرى فقط مدراء المساحات (المدراء الرئيسيين) ولا يرى المساعدين أو المشرفين الفرعيين للمساحة
+    if (u.role !== 'admin') return false;
+
     if (activeSubTab === 'all') return true;
     if (activeSubTab === 'pending') return u.status === 'pending' || !u.status;
     return u.status === activeSubTab;
@@ -200,7 +203,7 @@ export default function PortalApprovalsView({
                         ) : (
                           <div className="inline-flex flex-col items-center">
                             <span className="px-2.5 py-0.5 rounded-lg text-[10px] bg-blue-500/10 text-blue-600 border border-blue-500/20">
-                              🏢 عضو فرعي بمؤسسة الرواد
+                              🏢 عضو فرعي ببرنامج إدارة العمالة المهنية
                             </span>
                             <span className="text-[9px] text-slate-400 mt-1 font-normal">
                               الفرع: {user.branch || 'كامل الفروع'}

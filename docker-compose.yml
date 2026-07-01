@@ -1,30 +1,28 @@
 services:
-  mariadb_db:
-    image: mariadb:10.11
-    container_name: labor_mariadb_db
+  postgres_db:
+    image: postgres:15
+    container_name: labor_postgres_db
     restart: always
     environment:
-      MYSQL_ROOT_PASSWORD: StrongLocalRootPassword2026
-      MYSQL_USER: labor_admin
-      MYSQL_PASSWORD: StrongLocalPassword2026
-      MYSQL_DATABASE: labor_management_db
+      POSTGRES_USER: labor_admin
+      POSTGRES_PASSWORD: StrongLocalPassword2026
+      POSTGRES_DB: labor_management_db
     ports:
-      - "3306:3306"
+      - "5432:5432"
     volumes:
-      - mariadb_data:/var/lib/mysql
-      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql
+      - postgres_data:/var/lib/postgresql/data
 
-  phpmyadmin:
-    image: phpmyadmin:latest
-    container_name: labor_phpmyadmin
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: labor_pgadmin
     restart: always
     environment:
-      PMA_HOST: mariadb_db
-      PMA_PORT: 3306
+      PGADMIN_DEFAULT_EMAIL: admin@company.com
+      PGADMIN_DEFAULT_PASSWORD: StrongLocalPassword2026
     ports:
-      - "8085:80" # تم استخدام البورت 8085 لكي تتجنب بورت 80 المحجوز وبورت 8080 لتفادي أي مشاكل أو تعارضات
+      - "8085:80" # تم الإبقاء على البورت 8085 للدخول إلى لوحة تحكم قاعدة البيانات pgAdmin
     depends_on:
-      - mariadb_db
+      - postgres_db
 
   labor_app:
     build: .
@@ -34,14 +32,13 @@ services:
       - "3150:3150"
     environment:
       - PORT=3150
-      - DB_HOST=mariadb_db
-      - DB_PORT=3306
+      - DB_HOST=postgres_db
+      - DB_PORT=5432
       - DB_USER=labor_admin
       - DB_PASSWORD=StrongLocalPassword2026
       - DB_DATABASE=labor_management_db
     depends_on:
-      - mariadb_db
+      - postgres_db
 
 volumes:
-  mariadb_data:
-
+  postgres_data:

@@ -152,6 +152,48 @@ export default function EmployeeListView({
     alert(`✓ تم تعديل وتحديث الرصيد الافتتاحي للعامِل ${selectedEmp.name} بنجاح`);
   };
 
+  // Form states: Edit Employee Info
+  const [isEditEmployeeOpen, setIsEditEmployeeOpen] = useState(false);
+  const [editEmpName, setEditEmpName] = useState('');
+  const [editEmpIqama, setEditEmpIqama] = useState('');
+  const [editEmpEmployeeId, setEditEmpEmployeeId] = useState('');
+  const [editEmpMobile, setEditEmpMobile] = useState('');
+  const [editEmpBranch, setEditEmpBranch] = useState('');
+  const [editEmpKafalaStartMonth, setEditEmpKafalaStartMonth] = useState('شعبان');
+  const [editEmpKafalaStartYear, setEditEmpKafalaStartYear] = useState('1447');
+  const [editEmpNotes, setEditEmpNotes] = useState('');
+
+  const handleOpenEditEmployee = (emp: Employee) => {
+    setSelectedEmp(emp);
+    setEditEmpName(emp.name);
+    setEditEmpIqama(emp.iqamaNo);
+    setEditEmpEmployeeId(emp.employeeId || '');
+    setEditEmpMobile(emp.mobile || '');
+    setEditEmpBranch(emp.branch || '');
+    setEditEmpKafalaStartMonth(emp.kafalaStartMonth || 'شعبان');
+    setEditEmpKafalaStartYear(emp.kafalaStartYear || '1447');
+    setEditEmpNotes(emp.notes || '');
+    setIsEditEmployeeOpen(true);
+  };
+
+  const submitEditEmployee = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedEmp) return;
+    const updated: Employee = {
+      ...selectedEmp,
+      name: editEmpName,
+      employeeId: editEmpEmployeeId,
+      mobile: editEmpMobile,
+      branch: editEmpBranch,
+      kafalaStartMonth: editEmpKafalaStartMonth,
+      kafalaStartYear: editEmpKafalaStartYear,
+      notes: editEmpNotes
+    };
+    onUpdateEmployee(updated);
+    setIsEditEmployeeOpen(false);
+    alert(`✓ تم تحديث بيانات الموظف ${editEmpName} بنجاح`);
+  };
+
   // Form states: New Consolidated Debt (إثبات مديونية)
   const [isDebtOpen, setIsDebtOpen] = useState(false);
   const [debtTab, setDebtTab] = useState<'kafala' | 'iqama' | 'insurance' | 'other'>('kafala');
@@ -873,6 +915,13 @@ export default function EmployeeListView({
                               title="تعديل وتحديث الرصيد الافتتاحي المستحق"
                             >
                               💳 افتتاح
+                            </button>
+                            <button 
+                              onClick={() => handleOpenEditEmployee(e)}
+                              className="px-1.5 py-0.5 bg-indigo-100 text-indigo-900 hover:bg-indigo-150 rounded text-[10px] font-bold transition-all cursor-pointer"
+                              title="تعديل وتحديث البيانات الأساسية للموظف"
+                            >
+                              ✍️ تعديل
                             </button>
                             <button 
                               onClick={() => handleOpenExpiry(e)}
@@ -1678,6 +1727,133 @@ export default function EmployeeListView({
                 className="px-5 py-2 bg-amber-600 text-white rounded-lg text-xs hover:bg-amber-700 font-bold shadow-md cursor-pointer"
               >
                 تحديث وحفظ الأرصدة الافتتاحية ✓
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* ✍️ MODAL 8: EDIT EMPLOYEE BASIC INFO */}
+      {isEditEmployeeOpen && selectedEmp && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <form onSubmit={submitEditEmployee} className="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-100 overflow-hidden text-right animate-in fade-in zoom-in-95 duration-150">
+            <div className="bg-gradient-to-r from-indigo-600 to-indigo-500 p-4 text-white flex justify-between items-center">
+              <h4 className="font-extrabold text-sm flex items-center gap-1.5 font-sans">
+                <span>✍️ تعديل وتحديث بيانات الموظف الأساسية</span>
+              </h4>
+              <button type="button" onClick={() => setIsEditEmployeeOpen(false)} className="text-white hover:bg-white/10 p-1 rounded-full cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="p-5 space-y-3.5 text-xs font-bold text-slate-700 max-h-[70vh] overflow-y-auto">
+              <div className="space-y-1.5">
+                <label className="text-[11px] text-slate-500 block">اسم الموظف / العامل *</label>
+                <input 
+                  type="text" 
+                  required
+                  value={editEmpName} 
+                  onChange={(e) => setEditEmpName(e.target.value)} 
+                  className="w-full text-xs py-2 px-3 border border-slate-200 rounded-lg bg-slate-50 focus:bg-white focus:outline-none" 
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <label className="text-[11px] text-slate-500 block">رقم الإقامة (معرّف ثابت)</label>
+                  <input 
+                    type="text" 
+                    disabled
+                    value={editEmpIqama} 
+                    className="w-full text-xs py-2 px-3 border border-slate-200 rounded-lg bg-slate-100 text-slate-500 focus:outline-none cursor-not-allowed font-mono" 
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[11px] text-slate-500 block">الرقم الوظيفي</label>
+                  <input 
+                    type="text" 
+                    value={editEmpEmployeeId} 
+                    onChange={(e) => setEditEmpEmployeeId(e.target.value)} 
+                    placeholder="اختياري"
+                    className="w-full text-xs py-2 px-3 border border-slate-200 rounded-lg bg-slate-50 focus:bg-white focus:outline-none font-mono" 
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <label className="text-[11px] text-slate-500 block">رقم الجوال *</label>
+                  <input 
+                    type="text" 
+                    required
+                    value={editEmpMobile} 
+                    onChange={(e) => setEditEmpMobile(e.target.value)} 
+                    className="w-full text-xs py-2 px-3 border border-slate-200 rounded-lg bg-slate-50 focus:bg-white focus:outline-none font-mono" 
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[11px] text-slate-500 block">الفرع الحالي *</label>
+                  <select 
+                    value={editEmpBranch} 
+                    onChange={(e) => setEditEmpBranch(e.target.value)} 
+                    className="w-full text-xs py-2 px-3 border border-slate-200 rounded-lg bg-slate-50 focus:bg-white focus:outline-none"
+                  >
+                    {branches.map(b => (
+                      <option key={b} value={b}>{b}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-150">
+                <div className="space-y-1.5">
+                  <label className="text-[11px] text-slate-500 block">شهر بداية الكفالة *</label>
+                  <select 
+                    value={editEmpKafalaStartMonth} 
+                    onChange={(e) => setEditEmpKafalaStartMonth(e.target.value)} 
+                    className="w-full text-xs py-2 px-3 border border-slate-200 rounded-lg bg-white focus:outline-none"
+                  >
+                    {AR_HIJRI_MONTHS.map(m => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[11px] text-slate-500 block">سنة بداية الكفالة *</label>
+                  <input 
+                    type="text" 
+                    required
+                    value={editEmpKafalaStartYear} 
+                    onChange={(e) => setEditEmpKafalaStartYear(e.target.value)} 
+                    className="w-full text-xs py-2 px-3 border border-slate-200 rounded-lg bg-white focus:outline-none font-mono" 
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[11px] text-slate-500 block">ملاحظات وبيان إضافي</label>
+                <textarea 
+                  value={editEmpNotes} 
+                  onChange={(e) => setEditEmpNotes(e.target.value)} 
+                  rows={2}
+                  className="w-full text-xs py-2 px-3 border border-slate-200 rounded-lg bg-slate-50 focus:bg-white focus:outline-none resize-none font-sans" 
+                />
+              </div>
+            </div>
+
+            <div className="p-4 bg-slate-50 border-t border-slate-150 flex justify-end gap-2.5">
+              <button 
+                type="button" 
+                onClick={() => setIsEditEmployeeOpen(false)} 
+                className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg text-xs hover:bg-slate-350 font-bold cursor-pointer font-sans"
+              >
+                إلغاء
+              </button>
+              <button 
+                type="submit" 
+                className="px-5 py-2 bg-indigo-600 text-white rounded-lg text-xs hover:bg-indigo-700 font-bold shadow-md cursor-pointer font-sans"
+              >
+                تحديث وحفظ البيانات ✓
               </button>
             </div>
           </form>
