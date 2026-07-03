@@ -493,6 +493,12 @@ app.get("/api/users", async (req, res) => {
 
 app.post("/api/users", async (req, res) => {
   const u = req.body;
+  const callerEmail = req.query.callerEmail as string || "";
+  if (u && (String(u.email).toLowerCase().trim() === "shady.nasif@gmail.com" || u.uid === "user-admin")) {
+    if (callerEmail !== "shady.nasif@gmail.com") {
+      return res.status(403).json({ error: "لا يمكن تعديل أو تسجيل حساب المطور الرئيسي!" });
+    }
+  }
   try {
     if (pool) {
       // Cleaned PostgreSQL upsert
@@ -528,10 +534,15 @@ app.post("/api/users", async (req, res) => {
 app.put("/api/users/:uid", async (req, res) => {
   const { uid } = req.params;
   const updates = req.body;
+  const callerEmail = req.query.callerEmail as string || "";
   try {
     if (pool) {
       const users: any = await runQuery("SELECT email FROM users WHERE uid = ?", [uid]);
-      if (users && users.length > 0 && users[0].email === "shady.nasif@gmail.com") {
+      const isDev = (users && users.length > 0 && users[0].email === "shady.nasif@gmail.com") || uid === "user-admin";
+      if (isDev) {
+        if (callerEmail !== "shady.nasif@gmail.com") {
+          return res.status(403).json({ error: "لا يمكن تعديل حساب المطور الرئيسي إلا للمطور نفسه!" });
+        }
         if (updates.status && updates.status !== "approved") {
           return res.status(403).json({ error: "لا يمكن تعديل حالة حساب المطور الرئيسي!" });
         }
@@ -556,7 +567,11 @@ app.put("/api/users/:uid", async (req, res) => {
       return res.json({ success: true });
     } else {
       const targetUser = fallbackUsers.find((u) => u.uid === uid);
-      if (targetUser && targetUser.email === "shady.nasif@gmail.com") {
+      const isDev = (targetUser && targetUser.email === "shady.nasif@gmail.com") || uid === "user-admin";
+      if (isDev) {
+        if (callerEmail !== "shady.nasif@gmail.com") {
+          return res.status(403).json({ error: "لا يمكن تعديل حساب المطور الرئيسي إلا للمطور نفسه!" });
+        }
         if (updates.status && updates.status !== "approved") {
           return res.status(403).json({ error: "لا يمكن تعديل حالة حساب المطور الرئيسي!" });
         }
@@ -582,15 +597,17 @@ app.delete("/api/users/:uid", async (req, res) => {
   try {
     if (pool) {
       const users: any = await runQuery("SELECT email FROM users WHERE uid = ?", [uid]);
-      if (users && users.length > 0 && users[0].email === "shady.nasif@gmail.com") {
-        return res.status(403).json({ error: "لا يمكن حذف حساب مطور البرنامج الرئيسي!" });
+      const isDev = (users && users.length > 0 && users[0].email === "shady.nasif@gmail.com") || uid === "user-admin";
+      if (isDev) {
+        return res.status(403).json({ error: "لا يمكن حذف حساب مطور البرنامج الرئيسي نهائياً!" });
       }
       await runQuery("DELETE FROM users WHERE uid = ?", [uid]);
       return res.json({ success: true });
     } else {
       const targetUser = fallbackUsers.find((u) => u.uid === uid);
-      if (targetUser && targetUser.email === "shady.nasif@gmail.com") {
-        return res.status(403).json({ error: "لا يمكن حذف حساب مطور البرنامج الرئيسي!" });
+      const isDev = (targetUser && targetUser.email === "shady.nasif@gmail.com") || uid === "user-admin";
+      if (isDev) {
+        return res.status(403).json({ error: "لا يمكن حذف حساب مطور البرنامج الرئيسي نهائياً!" });
       }
       fallbackUsers = fallbackUsers.filter((u) => u.uid !== uid);
       return res.json({ success: true });

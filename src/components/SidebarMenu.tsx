@@ -12,7 +12,6 @@ interface SidebarMenuProps {
   activeTab: string;
   setActiveTab: (tab: string) => void;
   currentUser: UserProfile;
-  onChangeUserRole: (role: 'admin' | 'branch' | 'viewer') => void;
   onResetData: () => void;
   totalEmployeesCount: number;
   totalAlertsCount: number;
@@ -29,7 +28,6 @@ export default function SidebarMenu({
   activeTab,
   setActiveTab,
   currentUser,
-  onChangeUserRole,
   onResetData,
   totalEmployeesCount,
   totalAlertsCount,
@@ -145,17 +143,11 @@ export default function SidebarMenu({
             </div>
           )}
           
-          <div className="mt-3 pt-2.5 border-t border-slate-800/80">
-            <label className="text-[10px] text-slate-400 block font-semibold mb-1">تعديل الصلاحية الفورية (للعرض والترخيص):</label>
-            <select 
-              value={currentUser.role}
-              onChange={(e) => onChangeUserRole(e.target.value as any)}
-              className="w-full bg-[#152e46] text-white text-[11px] font-bold py-1.5 px-2 rounded-lg border border-slate-700 focus:outline-none focus:ring-1 focus:ring-primary-light"
-            >
-              <option value="admin">مدير النظام (Admin) — كامل الصلاحيات</option>
-              <option value="branch">مسؤول الفرع (Branch) — يرى فرعه فقط</option>
-              <option value="viewer">مشاهد كلاسيكي (Viewer) — معطل جزئي</option>
-            </select>
+          <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex justify-between items-center text-[10px]">
+            <span className="text-slate-400 font-semibold">مستوى الصلاحية:</span>
+            <span className="bg-amber-500/10 text-amber-500 font-extrabold px-2 py-0.5 rounded border border-amber-500/20">
+              {guestRoleLabels[currentUser.role] || currentUser.role}
+            </span>
           </div>
         </div>
 

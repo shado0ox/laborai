@@ -845,18 +845,6 @@ export default function App() {
     }
   };
 
-  // Change simulation system role
-  const handleChangeUserRole = (role: 'admin' | 'branch' | 'viewer') => {
-    const updatedUser = { ...currentUser, role };
-    if (role === 'branch') {
-      updatedUser.branch = branches[1] || 'فرع جدة الغربية';
-    } else {
-      updatedDebtReset(updatedUser);
-    }
-    // Set immediate state switch
-    handleRegisterPayment('system', 0, `تغيير منظور تصفح العرض الفوري إلى رتبة: ${role}`);
-  };
-
   const handleRegisterPaymentProxy = (iqNo: string, amt: number, type: string, n?: string, m?: string, y?: string) => {
     handleRegisterPayment(iqNo, amt, type, n, m, y);
   };
@@ -871,42 +859,6 @@ export default function App() {
 
   // Quick triggers notifications toast
   const [toastMsg, setToastMsg] = useState('');
-
-  // Dynamic user switcher helper
-  const changeProfileDirect = (role: 'admin' | 'branch' | 'viewer') => {
-    const matchUser = users.find(u => u.role === role);
-    if (role === 'admin') {
-      setCurrentUser({
-        uid: 'user-admin',
-        name: 'شادي ناصف',
-        email: 'shady.nasif@gmail.com',
-        role: 'admin',
-        createdAt: new Date().toISOString()
-      });
-    } else if (role === 'branch') {
-      setCurrentUser({
-        uid: 'user-jeddah',
-        name: 'أحمد الغامدي',
-        email: 'jeddah.branch@company.com',
-        role: 'branch',
-        branch: branches[1] || 'فرع جدة الغربية',
-        createdAt: new Date().toISOString()
-      });
-    } else {
-      setCurrentUser({
-        uid: 'user-viewer',
-        name: 'سلطان المقرن',
-        email: 'viewer@company.com',
-        role: 'viewer',
-        createdAt: new Date().toISOString()
-      });
-    }
-  };
-
-  const updatedDebtReset = (user: UserProfile) => {
-    setCurrentUser(user);
-    logActivity('login', `محاكاة تبديل صلاحيات العرض الجاري إلى رتبة: ${user.role}`);
-  };
 
   // Add custom branch to settings
   const handleAddBranch = (e: React.FormEvent) => {
@@ -936,6 +888,12 @@ export default function App() {
   const handleAddUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newUserName.trim() || !newUserEmail.trim()) return;
+
+    const emailLower = newUserEmail.trim().toLowerCase();
+    if (emailLower === 'shady.nasif@gmail.com') {
+      toastNotice('⚠️ خطأ أمني: لا يمكن تسجيل مستخدم بالبريد الإلكتروني الخاص بالمطور الرئيسي!');
+      return;
+    }
     
     const newUser: UserProfile = {
       uid: `u_${Date.now()}`,
@@ -1158,7 +1116,6 @@ export default function App() {
           setSelectedStatementEmp(null);
         }}
         currentUser={currentUser}
-        onChangeUserRole={changeProfileDirect}
         onResetData={handleResetData}
         totalEmployeesCount={employees.filter(e => e.status === 'active').length}
         totalAlertsCount={getAlertTotalsCounts()}

@@ -92,6 +92,10 @@ export default function PortalAuthView({
     setLoginError(null);
 
     const normEmail = regEmail.trim().toLowerCase();
+    if (normEmail === 'shady.nasif@gmail.com') {
+      alert('⚠️ خطأ أمني: لا يمكن تسجيل حساب بالبريد الإلكتروني الخاص بالمطور الرئيسي!');
+      return;
+    }
     if (users.some(u => u.email.trim().toLowerCase() === normEmail)) {
       alert('البريد الإلكتروني هذا مستخدم بالفعل ومسجّل من قبل.');
       return;
