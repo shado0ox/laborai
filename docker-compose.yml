@@ -4,9 +4,9 @@ services:
     container_name: labor_postgres_db
     restart: always
     environment:
-      POSTGRES_USER: labor_admin
-      POSTGRES_PASSWORD: StrongLocalPassword2026
-      POSTGRES_DB: labor_management_db
+      POSTGRES_USER: ${DB_USER:-labor_admin}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_DATABASE:-labor_management_db}
     ports:
       - "5432:5432"
     volumes:
@@ -17,8 +17,8 @@ services:
     container_name: labor_pgadmin
     restart: always
     environment:
-      PGADMIN_DEFAULT_EMAIL: admin@company.com
-      PGADMIN_DEFAULT_PASSWORD: StrongLocalPassword2026
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@company.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:?يجب تحديد PGADMIN_DEFAULT_PASSWORD في ملف .env}
     ports:
       - "8085:80" # تم الإبقاء على البورت 8085 للدخول إلى لوحة تحكم قاعدة البيانات pgAdmin
     depends_on:
@@ -30,13 +30,14 @@ services:
     restart: always
     ports:
       - "3150:3150"
+    env_file:
+      - .env
     environment:
       - PORT=3150
       - DB_HOST=postgres_db
       - DB_PORT=5432
-      - DB_USER=labor_admin
-      - DB_PASSWORD=StrongLocalPassword2026
-      - DB_DATABASE=labor_management_db
+      - DB_USER=${DB_USER:-labor_admin}
+      - DB_DATABASE=${DB_DATABASE:-labor_management_db}
     depends_on:
       - postgres_db
 

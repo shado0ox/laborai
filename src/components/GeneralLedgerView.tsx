@@ -22,6 +22,17 @@ interface MergedTransaction {
   source: 'employee_payment' | 'manual_ledger';
 }
 
+// يرفق رمز الدخول (JWT) في كل الطلبات لهذا التبويب، تمامًا زي دالة authFetch الرئيسية
+// في App.tsx — لازمة هنا لأن هذا المكوّن مستقل ولا يستقبل authFetch كـ prop.
+const ledgerAuthFetch = async (url: string, options: RequestInit = {}) => {
+  const token = sessionStorage.getItem('authToken');
+  const headers = { ...(options.headers || {}) } as Record<string, string>;
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  return fetch(url, { ...options, headers });
+};
+
 export default function GeneralLedgerView({
   payments,
   currentUser,
@@ -48,7 +59,7 @@ export default function GeneralLedgerView({
     setLoading(true);
     try {
       const tid = currentUser.tenantId || '';
-      const res = await fetch(`/api/general-ledger?tenantId=${tid}`);
+      const res = await ledgerAuthFetch(`/api/general-ledger?tenantId=${tid}`);
       if (res.ok) {
         const data = await res.json();
         setManualEntries(data);
@@ -230,7 +241,7 @@ export default function GeneralLedgerView({
 
     try {
       const tid = currentUser.tenantId || '';
-      const res = await fetch(`/api/general-ledger?tenantId=${tid}`, {
+      const res = await ledgerAuthFetch(`/api/general-ledger?tenantId=${tid}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newEntry)
@@ -244,16 +255,12 @@ export default function GeneralLedgerView({
         const addedMonth = formDate.substring(0, 7);
         setSelectedMonth(addedMonth);
       } else {
-        alert('حدث خطأ أثناء حفظ القيد المالي على السيرفر');
+        const errData = await res.json().catch(() => ({}));
+        alert(`⚠️ لم يتم حفظ القيد في قاعدة البيانات: ${errData.error || 'حدث خطأ أثناء الحفظ على السيرفر'}`);
       }
     } catch (err) {
-      console.warn('Post error, saving in local state:', err);
-      // Fallback in-memory
-      setManualEntries(prev => [newEntry, ...prev]);
-      setFormBayan('');
-      setFormAmount('');
-      const addedMonth = formDate.substring(0, 7);
-      setSelectedMonth(addedMonth);
+      console.error('API save ledger entry error:', err);
+      alert('⚠️ تعذر الاتصال بالخادم — لم يتم حفظ القيد. تأكد من اتصالك بالإنترنت وحاول مرة أخرى.');
     } finally {
       setFormIsSubmitting(false);
     }
@@ -271,15 +278,16 @@ export default function GeneralLedgerView({
     }
 
     try {
-      const res = await fetch(`/api/general-ledger/${id}`, { method: 'DELETE' });
+      const res = await ledgerAuthFetch(`/api/general-ledger/${id}`, { method: 'DELETE' });
       if (res.ok) {
         setManualEntries(prev => prev.filter(e => e.id !== id));
       } else {
-        alert('فشل حذف القيد من السيرفر');
+        const errData = await res.json().catch(() => ({}));
+        alert(`⚠️ لم يتم حذف القيد من قاعدة البيانات: ${errData.error || 'فشل حذف القيد من السيرفر'}`);
       }
     } catch (err) {
-      console.warn('Delete error, removing from local state:', err);
-      setManualEntries(prev => prev.filter(e => e.id !== id));
+      console.error('API delete ledger entry error:', err);
+      alert('⚠️ تعذر الاتصال بالخادم — لم يتم حذف القيد. تأكد من اتصالك بالإنترنت وحاول مرة أخرى.');
     }
   };
 

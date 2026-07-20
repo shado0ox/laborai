@@ -31,10 +31,24 @@ export default function PortalDevPanelView({
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [dbDiagnosticResult, setDbDiagnosticResult] = useState<any>(null);
 
+  const authFetch = async (url: string, options: RequestInit = {}) => {
+    const token = sessionStorage.getItem('authToken');
+    const headers = {
+      ...(options.headers || {}),
+    } as Record<string, string>;
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    return fetch(url, {
+      ...options,
+      headers
+    });
+  };
+
   const fetchGlobalLogs = async () => {
     setIsRefreshing(true);
     try {
-      const res = await fetch('/api/logs'); // Fetches system logs
+      const res = await authFetch('/api/logs'); // Fetches system logs
       if (res.ok) {
         const data = await res.json();
         setLogs(data);
@@ -50,7 +64,7 @@ export default function PortalDevPanelView({
     setIsRefreshing(true);
     try {
       await onRefreshDbStatus();
-      const res = await fetch('/api/db-status');
+      const res = await authFetch('/api/db-status');
       if (res.ok) {
         const data = await res.json();
         setDbDiagnosticResult(data);
@@ -67,7 +81,7 @@ export default function PortalDevPanelView({
     if (confirm('⚠️ هل تريد إعادة تشغيل تهيئة وتحديث جداول قاعدة بيانات PostgreSQL؟')) {
       setIsRefreshing(true);
       try {
-        const res = await fetch(`/api/admin/repair-db?callerEmail=${currentUser.email}`, { method: 'POST' });
+        const res = await authFetch('/api/admin/repair-db', { method: 'POST' });
         if (res.ok) {
           toastNotice('✓ تم تنشيط وفحص هيكلة الجداول بنجاح.');
         } else {

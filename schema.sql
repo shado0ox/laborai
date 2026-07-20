@@ -62,7 +62,11 @@ CREATE TABLE IF NOT EXISTS pricing_settings (
 CREATE TABLE IF NOT EXISTS company_settings (
     tenant_id VARCHAR(128) PRIMARY KEY,
     name VARCHAR(255) NOT NULL DEFAULT 'برنامج إدارة العمالة المهنية',
-    logo_base64 TEXT
+    logo_base64 TEXT,
+    allow_ledger_for_users BOOLEAN DEFAULT FALSE,
+    activation_date VARCHAR(100),
+    expiration_date VARCHAR(100),
+    support_phone VARCHAR(100)
 );
 
 -- 6. جدول سجلات العمليات (activity_logs)
@@ -81,3 +85,17 @@ CREATE TABLE IF NOT EXISTS branches (
     tenant_id VARCHAR(128) NOT NULL DEFAULT '',
     PRIMARY KEY (name, tenant_id)
 );
+
+-- 8. جدول دفتر الأستاذ العام (general_ledger)
+CREATE TABLE IF NOT EXISTS general_ledger (
+    id VARCHAR(128) PRIMARY KEY,
+    date DATE NOT NULL,
+    bayan TEXT NOT NULL,
+    debit DECIMAL(12, 2) DEFAULT 0.00,
+    credit DECIMAL(12, 2) DEFAULT 0.00,
+    tenant_id VARCHAR(128),
+    created_at VARCHAR(100)
+);
+
+-- ملاحظة أمان: عمود password يجب أن يحتوي دائماً على قيمة مُشفّرة بـ bcrypt (تبدأ بـ $2a$ أو $2b$).
+-- الخادم (server.ts) لا يقبل تسجيل الدخول بكلمات مرور نصية (plaintext) بعد الآن.

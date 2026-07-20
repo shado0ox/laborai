@@ -1,13 +1,13 @@
 import React, { useState } from 'react';
 import { UserProfile } from '../types';
+import DefaultCompanyLogo from './DefaultCompanyLogo';
 import { 
   ShieldCheck, Mail, Lock, User, Sparkles, Building, KeyRound, 
   ArrowRight, UserPlus, FileText, CheckCircle2, RefreshCw, Database, Wifi, WifiOff, AlertTriangle 
 } from 'lucide-react';
 
 interface PortalAuthViewProps {
-  users: UserProfile[];
-  onLoginSuccess: (user: UserProfile) => void;
+  onLoginSuccess: (user: UserProfile, token: string) => void;
   onRegisterSubmit: (newUser: UserProfile) => void;
   companyName: string;
   logoBase64?: string;
@@ -23,7 +23,6 @@ interface PortalAuthViewProps {
 }
 
 export default function PortalAuthView({
-  users,
   onLoginSuccess,
   onRegisterSubmit,
   companyName,
@@ -33,6 +32,7 @@ export default function PortalAuthView({
 }: PortalAuthViewProps) {
   const [activeMode, setActiveMode] = useState<'login' | 'register'>('login');
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -54,50 +54,40 @@ export default function PortalAuthView({
   const [regBranch, setRegBranch] = useState('');
   const [regSuccess, setRegSuccess] = useState(false);
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError(null);
+    setIsSubmitting(true);
 
     const normEmail = loginEmail.trim().toLowerCase();
-    
-    // Find matching user
-    const found = users.find(u => u.email.trim().toLowerCase() === normEmail);
-    if (!found) {
-      setLoginError('❌ البريد الإلكتروني غير مسجّل بمستودعات النظام.');
-      return;
-    }
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: normEmail, password: loginPassword })
+      });
 
-    if (found.password && found.password !== loginPassword) {
-      setLoginError('❌ كلمة المرور أو رمز التفويض غير صحيح.');
-      return;
-    }
+      const data = await res.json();
+      if (!res.ok) {
+        setLoginError(data.error || '❌ فشل تسجيل الدخول.');
+        return;
+      }
 
-    // Check status
-    if (found.status === 'pending') {
-      setLoginError('⏳ حسابك قيد المراجعة وبانتظار موافقة مدير البرنامج (شادي ناصف) لتفعيله.');
-      return;
+      onLoginSuccess(data.user, data.token);
+    } catch (err: any) {
+      setLoginError('❌ حدث خطأ في الاتصال بالخادم. يرجى التحقق من اتصال الشبكة.');
+    } finally {
+      setIsSubmitting(false);
     }
-
-    if (found.status === 'rejected') {
-      setLoginError('✕ تم رفض طلب تسجيلك في البوابة. تواصل مع الإدارة للدعم.');
-      return;
-    }
-
-    // Login success!
-    onLoginSuccess(found);
   };
 
-  const handleRegister = (e: React.FormEvent) => {
+  const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError(null);
 
     const normEmail = regEmail.trim().toLowerCase();
     if (normEmail === 'shady.nasif@gmail.com') {
       alert('⚠️ خطأ أمني: لا يمكن تسجيل حساب بالبريد الإلكتروني الخاص بالمطور الرئيسي!');
-      return;
-    }
-    if (users.some(u => u.email.trim().toLowerCase() === normEmail)) {
-      alert('البريد الإلكتروني هذا مستخدم بالفعل ومسجّل من قبل.');
       return;
     }
 
@@ -121,13 +111,32 @@ export default function PortalAuthView({
       createdAt: new Date().toISOString()
     };
 
-    onRegisterSubmit(newUserObj);
-    setRegSuccess(true);
-    
-    // Clear registration fields
-    setRegName('');
-    setRegEmail('');
-    setRegPassword('');
+    setIsSubmitting(true);
+    try {
+      const res = await fetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newUserObj)
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || '❌ فشل إرسال طلب تسجيل الحساب.');
+        return;
+      }
+
+      onRegisterSubmit(newUserObj);
+      setRegSuccess(true);
+      
+      // Clear registration fields
+      setRegName('');
+      setRegEmail('');
+      setRegPassword('');
+    } catch (err: any) {
+      alert('❌ حدث خطأ أثناء الاتصال بالخادم لإرسال طلب التسجيل.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -146,7 +155,7 @@ export default function PortalAuthView({
             {logoBase64 ? (
               <img src={logoBase64} alt="شعار المؤسسة المعتمد" className="w-full h-full object-contain" />
             ) : (
-              <span className="text-3xl">🏢</span>
+              <DefaultCompanyLogo className="w-full h-full" />
             )}
           </div>
           <div className="text-center space-y-1">

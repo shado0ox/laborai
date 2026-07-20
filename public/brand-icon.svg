@@ -1,0 +1,83 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="XSHADOX">
+  <defs>
+    <linearGradient id="bgNavy" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f2a52"/>
+      <stop offset="100%" stop-color="#081b38"/>
+    </linearGradient>
+    <linearGradient id="frameGold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffe9a8"/>
+      <stop offset="50%" stop-color="#d9a636"/>
+      <stop offset="100%" stop-color="#a97c1f"/>
+    </linearGradient>
+    <linearGradient id="shieldOuter" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#f7dd8a"/>
+      <stop offset="45%" stop-color="#d9a636"/>
+      <stop offset="100%" stop-color="#8a6212"/>
+    </linearGradient>
+    <linearGradient id="shieldInner" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#fff3c9"/>
+      <stop offset="50%" stop-color="#e9bb52"/>
+      <stop offset="100%" stop-color="#b3841f"/>
+    </linearGradient>
+    <linearGradient id="gearGold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fff3c9"/>
+      <stop offset="100%" stop-color="#c99a2e"/>
+    </linearGradient>
+    <linearGradient id="ribbonGold" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#f7dd8a"/>
+      <stop offset="100%" stop-color="#a97c1f"/>
+    </linearGradient>
+  </defs>
+
+  <!-- App-icon shape: rounded square navy background -->
+  <rect x="14" y="14" width="484" height="484" rx="96" fill="url(#bgNavy)"/>
+  <rect x="30" y="30" width="452" height="452" rx="82" fill="none" stroke="url(#frameGold)" stroke-width="6"/>
+
+  <!-- Shield -->
+  <path d="M 166,96 L 346,96
+           C 346,150 362,162 358,196
+           C 352,278 300,344 256,392
+           C 212,344 160,278 154,196
+           C 150,162 166,150 166,96 Z"
+        fill="url(#shieldOuter)" stroke="#7a5710" stroke-width="3"/>
+
+  <path d="M 182,112 L 330,112
+           C 330,158 344,168 341,198
+           C 336,268 292,326 256,368
+           C 220,326 176,268 171,198
+           C 168,168 182,158 182,112 Z"
+        fill="url(#shieldInner)" stroke="#fff7de" stroke-opacity="0.5" stroke-width="2"/>
+
+  <!-- Gear + person emblem, centered inside the shield -->
+  <g transform="translate(256,222)">
+    <!-- gear teeth -->
+    <g>
+      <rect x="-10" y="-88" width="20" height="26" rx="3" fill="url(#gearGold)" transform="rotate(0.0)"/>
+      <rect x="-10" y="-88" width="20" height="26" rx="3" fill="url(#gearGold)" transform="rotate(36.0)"/>
+      <rect x="-10" y="-88" width="20" height="26" rx="3" fill="url(#gearGold)" transform="rotate(72.0)"/>
+      <rect x="-10" y="-88" width="20" height="26" rx="3" fill="url(#gearGold)" transform="rotate(108.0)"/>
+      <rect x="-10" y="-88" width="20" height="26" rx="3" fill="url(#gearGold)" transform="rotate(144.0)"/>
+      <rect x="-10" y="-88" width="20" height="26" rx="3" fill="url(#gearGold)" transform="rotate(180.0)"/>
+      <rect x="-10" y="-88" width="20" height="26" rx="3" fill="url(#gearGold)" transform="rotate(216.0)"/>
+      <rect x="-10" y="-88" width="20" height="26" rx="3" fill="url(#gearGold)" transform="rotate(252.0)"/>
+      <rect x="-10" y="-88" width="20" height="26" rx="3" fill="url(#gearGold)" transform="rotate(288.0)"/>
+      <rect x="-10" y="-88" width="20" height="26" rx="3" fill="url(#gearGold)" transform="rotate(324.0)"/>
+    </g>
+    <!-- gear body ring -->
+    <circle r="72" fill="url(#gearGold)"/>
+    <circle r="72" fill="none" stroke="#8a6212" stroke-width="2"/>
+    <!-- white inner disc -->
+    <circle r="52" fill="#fbf7ee"/>
+    <!-- person silhouette -->
+    <circle cy="-14" r="19" fill="#5c4326"/>
+    <path d="M -30,38 C -30,6 -14,-8 0,-8 C 14,-8 30,6 30,38 Z" fill="#5c4326"/>
+  </g>
+
+  <!-- Ribbon banner -->
+  <g>
+    <polygon points="118,352 168,352 168,404 143,392 118,404" fill="url(#ribbonGold)" stroke="#7a5710" stroke-width="2"/>
+    <polygon points="394,352 344,352 344,404 369,392 394,404" fill="url(#ribbonGold)" stroke="#7a5710" stroke-width="2"/>
+    <rect x="140" y="350" width="232" height="46" fill="#0f2a52" stroke="url(#frameGold)" stroke-width="3"/>
+    <text x="256" y="382" font-family="'Arial Black','Arial',sans-serif" font-size="30" font-weight="900" text-anchor="middle" fill="url(#frameGold)" letter-spacing="2">XSHADOX</text>
+  </g>
+</svg>

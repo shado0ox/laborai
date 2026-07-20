@@ -18,6 +18,7 @@ import PortalAuthView from './components/PortalAuthView';
 import PortalApprovalsView from './components/PortalApprovalsView';
 import PortalSpacesView from './components/PortalSpacesView';
 import PortalDevPanelView from './components/PortalDevPanelView';
+import DefaultCompanyLogo from './components/DefaultCompanyLogo';
 
 import { 
   Menu, X, Sliders, RefreshCw, Upload, Building, Trash2, CheckCircle2 
@@ -43,7 +44,20 @@ export default function App() {
   });
 
   // Current session config
-  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
+  // ملاحظة: نستخدم sessionStorage عمدًا (مش localStorage) للجلسة الحالية —
+  // بمعنى: عمل Refresh للصفحة يحافظ على تسجيل الدخول، لكن إغلاق التبويب/المتصفح
+  // بالكامل يطلب تسجيل دخول جديد في المرة القادمة، كما طُلب تحديدًا.
+  // القراءة هنا synchronous (lazy initializer) حتى لا تظهر شاشة الدخول للحظة قبل
+  // استرجاع الجلسة المحفوظة.
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => {
+    try {
+      const stored = sessionStorage.getItem('labor_current_user');
+      return stored ? (JSON.parse(stored) as UserProfile) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [authToken, setAuthToken] = useState<string | null>(() => sessionStorage.getItem('authToken') || null);
 
   const [activeTab, setActiveTab] = useState('dashboard');
   const [selectedStatementEmp, setSelectedStatementEmp] = useState<Employee | null>(null);
@@ -70,9 +84,25 @@ export default function App() {
   const [migrationLog, setMigrationLog] = useState<string[]>([]);
   const [hasLocalData, setHasLocalData] = useState(false);
 
+  const authFetch = async (url: string, options: RequestInit = {}) => {
+    const token = authToken || sessionStorage.getItem('authToken');
+    const headers = {
+      ...(options.headers || {}),
+    } as Record<string, string>;
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    return fetch(url, {
+      ...options,
+      headers
+    });
+  };
+
   const fetchDbStatus = async () => {
     try {
-      const res = await fetch('/api/db-status');
+      const token = authToken || sessionStorage.getItem('authToken');
+      if (!token) return; // Only fetch if we have a token (since it requires authorization)
+      const res = await authFetch('/api/db-status');
       if (res.ok) {
         const data = await res.json();
         setDbStatusInfo(data);
@@ -137,7 +167,7 @@ export default function App() {
           if (key.includes('employees') && Array.isArray(parsed)) {
             setMigrationLog(p => [...p, `جاري ترحيل ${parsed.length} موظف إلى السيرفر لـ ${tenantId || 'الرئيسي'}...`]);
             for (const emp of parsed) {
-              await fetch(`/api/employees?tenantId=${tenantId}`, {
+              await authFetch(`/api/employees?tenantId=${tenantId}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(emp)
@@ -150,7 +180,7 @@ export default function App() {
           if (key.includes('payments') && Array.isArray(parsed)) {
             setMigrationLog(p => [...p, `جاري ترحيل ${parsed.length} دفعة مالية إلى السيرفر لـ ${tenantId || 'الرئيسي'}...`]);
             for (const pmt of parsed) {
-              await fetch(`/api/payments?tenantId=${tenantId}`, {
+              await authFetch(`/api/payments?tenantId=${tenantId}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(pmt)
@@ -162,7 +192,7 @@ export default function App() {
           // 3. Branches
           if (key.includes('branches') && Array.isArray(parsed)) {
             setMigrationLog(p => [...p, `جاري ترحيل الفروع إلى السيرفر لـ ${tenantId || 'الرئيسي'}...`]);
-            await fetch(`/api/branches?tenantId=${tenantId}`, {
+            await authFetch(`/api/branches?tenantId=${tenantId}`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(parsed)
@@ -174,7 +204,7 @@ export default function App() {
           if (key.includes('logs') && Array.isArray(parsed)) {
             setMigrationLog(p => [...p, `جاري ترحيل سجلات الحركة إلى السيرفر لـ ${tenantId || 'الرئيسي'}...`]);
             for (const logItem of parsed) {
-              await fetch(`/api/logs?tenantId=${tenantId}`, {
+              await authFetch(`/api/logs?tenantId=${tenantId}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(logItem)
@@ -193,11 +223,11 @@ export default function App() {
       // Refresh states
       if (currentUser) {
         const tid = currentUser.tenantId || '';
-        const empRes = await fetch(`/api/employees?tenantId=${tid}`);
+        const empRes = await authFetch(`/api/employees?tenantId=${tid}`);
         if (empRes.ok) setEmployees(await empRes.json());
-        const payRes = await fetch(`/api/payments?tenantId=${tid}`);
+        const payRes = await authFetch(`/api/payments?tenantId=${tid}`);
         if (payRes.ok) setPayments(await payRes.json());
-        const logRes = await fetch(`/api/logs?tenantId=${tid}`);
+        const logRes = await authFetch(`/api/logs?tenantId=${tid}`);
         if (logRes.ok) setLogs(await logRes.json());
       }
 
@@ -226,13 +256,13 @@ export default function App() {
   useEffect(() => {
     async function loadGlobalData() {
       try {
-        const res = await fetch('/api/users');
+        const res = await authFetch('/api/users');
         if (res.ok) {
           const fetchedUsers = await res.json() as UserProfile[];
           if (fetchedUsers.length === 0) {
             // Seed INITIAL_USERS to database
             for (const u of INITIAL_USERS) {
-              await fetch('/api/users', {
+              await authFetch('/api/users', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(u)
@@ -246,14 +276,10 @@ export default function App() {
           setUsers(INITIAL_USERS);
         }
 
-        // Check current session
-        const storedCurrentUser = localStorage.getItem('labor_current_user');
-        if (storedCurrentUser) {
-          const u = JSON.parse(storedCurrentUser) as UserProfile;
-          setCurrentUser(u);
-          if (u.email === 'shady.nasif@gmail.com') {
-            setActiveTab('dev_panel');
-          }
+        // ملاحظة: currentUser بقى يترجع تلقائيًا من sessionStorage عند أول تحميل
+        // (انظر الـ lazy initializer فوق)، فمحتاجين بس نضبط التاب النشط لحساب المطور.
+        if (currentUser && currentUser.email === 'shady.nasif@gmail.com') {
+          setActiveTab('dev_panel');
         }
       } catch (e) {
         console.warn('API global boot error (offline fallback used):', e);
@@ -261,30 +287,30 @@ export default function App() {
       }
     }
     loadGlobalData();
-  }, []);
+  }, [authToken]);
 
   // 2. Tenant/Workspace data loader - triggers whenever currentUser changes!
   useEffect(() => {
     if (!currentUser) return;
     async function loadTenantData() {
-      const tid = currentUser.tenantId || '';
+      const tid = currentUser?.tenantId || '';
       try {
         // Fetch Employees
-        const empRes = await fetch(`/api/employees?tenantId=${tid}`);
+        const empRes = await authFetch(`/api/employees?tenantId=${tid}`);
         if (empRes.ok) {
           const data = await empRes.json();
           setEmployees(data);
         }
 
         // Fetch Payments
-        const payRes = await fetch(`/api/payments?tenantId=${tid}`);
+        const payRes = await authFetch(`/api/payments?tenantId=${tid}`);
         if (payRes.ok) {
           const data = await payRes.json();
           setPayments(data);
         }
 
         // Fetch Branches
-        const branchRes = await fetch(`/api/branches?tenantId=${tid}`);
+        const branchRes = await authFetch(`/api/branches?tenantId=${tid}`);
         if (branchRes.ok) {
           const data = await branchRes.json();
           if (data && data.length > 0) {
@@ -293,7 +319,7 @@ export default function App() {
             const initialBrs = tid ? [] : INITIAL_BRANCHES;
             setBranches(initialBrs);
             if (initialBrs.length > 0) {
-              await fetch(`/api/branches?tenantId=${tid}`, {
+              await authFetch(`/api/branches?tenantId=${tid}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(initialBrs)
@@ -303,14 +329,14 @@ export default function App() {
         }
 
         // Fetch Logs
-        const logRes = await fetch(`/api/logs?tenantId=${tid}`);
+        const logRes = await authFetch(`/api/logs?tenantId=${tid}`);
         if (logRes.ok) {
           const data = await logRes.json();
           if (data && data.length > 0) {
             setLogs(data);
           } else {
             setLogs(INITIAL_LOGS);
-            await fetch(`/api/logs?tenantId=${tid}`, {
+            await authFetch(`/api/logs?tenantId=${tid}`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(INITIAL_LOGS[0])
@@ -319,14 +345,14 @@ export default function App() {
         }
 
         // Fetch Company
-        const compRes = await fetch(`/api/company-settings?tenantId=${tid}`);
+        const compRes = await authFetch(`/api/company-settings?tenantId=${tid}`);
         if (compRes.ok) {
           const data = await compRes.json();
           setCompanySettings(data);
         }
 
         // Fetch Pricing
-        const pricRes = await fetch(`/api/pricing-settings?tenantId=${tid}`);
+        const pricRes = await authFetch(`/api/pricing-settings?tenantId=${tid}`);
         if (pricRes.ok) {
           const data = await pricRes.json();
           setPricingSettings(data);
@@ -343,7 +369,7 @@ export default function App() {
     if (companySettings.name) {
       document.title = companySettings.name;
     } else {
-      document.title = 'نظام إدارة ومتابعة العمالة';
+      document.title = 'إدارة العمالة';
     }
   }, [companySettings.name]);
 
@@ -359,35 +385,14 @@ export default function App() {
         document.head.appendChild(newLink);
       }
     } else {
-      // Use building emoji canvas as dynamic fallback favicon
-      try {
-        const canvas = document.createElement('canvas');
-        canvas.width = 64;
-        canvas.height = 64;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.font = '48px serif';
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.fillText('🏢', 32, 32);
-          const emojiUrl = canvas.toDataURL('image/png');
-          if (link) {
-            link.href = emojiUrl;
-          } else {
-            const newLink = document.createElement('link');
-            newLink.rel = 'icon';
-            newLink.href = emojiUrl;
-            document.head.appendChild(newLink);
-          }
-        } else {
-          if (link) {
-            link.href = '/favicon.ico';
-          }
-        }
-      } catch (err) {
-        if (link) {
-          link.href = '/favicon.ico';
-        }
+      // No custom company logo uploaded yet: fall back to the app's own branded icon
+      if (link) {
+        link.href = '/brand-icon.svg';
+      } else {
+        const newLink = document.createElement('link');
+        newLink.rel = 'icon';
+        newLink.href = '/brand-icon.svg';
+        document.head.appendChild(newLink);
       }
     }
   }, [companySettings.logoBase64]);
@@ -401,16 +406,23 @@ export default function App() {
     setPayments(list);
   };
 
-  const saveBranchesList = async (list: string[]) => {
-    setBranches(list);
+  const saveBranchesList = async (list: string[]): Promise<boolean> => {
     try {
-      await fetch(`/api/branches?tenantId=${currentUser?.tenantId || ''}`, {
+      const res = await authFetch(`/api/branches?tenantId=${currentUser?.tenantId || ''}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(list)
       });
-    } catch (err) {
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `فشل الحفظ (HTTP ${res.status})`);
+      }
+      setBranches(list);
+      return true;
+    } catch (err: any) {
       console.error('API branches save error:', err);
+      alert(`⚠️ لم يتم حفظ الفروع في قاعدة البيانات: ${err.message || 'تعذر الاتصال بالخادم'}`);
+      return false;
     }
   };
 
@@ -425,14 +437,18 @@ export default function App() {
   const handleLogout = () => {
     if (confirm('هل أنت متأكد من رغبتك في تسجيل الخروج الآن؟')) {
       setCurrentUser(null);
-      localStorage.removeItem('labor_current_user');
+      setAuthToken(null);
+      sessionStorage.removeItem('labor_current_user');
+      sessionStorage.removeItem('authToken');
       setActiveTab('dashboard');
     }
   };
 
-  const handleLoginSuccess = (user: UserProfile) => {
+  const handleLoginSuccess = (user: UserProfile, token: string) => {
     setCurrentUser(user);
-    localStorage.setItem('labor_current_user', JSON.stringify(user));
+    setAuthToken(token);
+    sessionStorage.setItem('labor_current_user', JSON.stringify(user));
+    sessionStorage.setItem('authToken', token);
     if (user.email === 'shady.nasif@gmail.com') {
       setActiveTab('dev_panel');
     } else {
@@ -441,42 +457,44 @@ export default function App() {
   };
 
   const handleRegisterSubmit = async (newUser: UserProfile) => {
-    const updatedUsers = [...users, newUser];
-    setUsers(updatedUsers);
     try {
-      await fetch('/api/users', {
+      const res = await authFetch('/api/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newUser)
       });
-    } catch (err) {
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `فشل التسجيل (HTTP ${res.status})`);
+      }
+      setUsers(prev => [...prev, newUser]);
+    } catch (err: any) {
       console.error('API register user error:', err);
+      alert(`⚠️ لم يتم حفظ التسجيل في قاعدة البيانات: ${err.message || 'تعذر الاتصال بالخادم'}`);
     }
   };
 
   const handleUpdateUserStatus = async (uid: string, status: 'approved' | 'rejected') => {
-    const updated = users.map(u => {
-      if (u.uid === uid) {
-        return { ...u, status };
-      }
-      return u;
-    });
-    setUsers(updated);
-    
     const uName = users.find(u => u.uid === uid)?.name || 'مستخدم غير معروف';
     try {
-      await fetch(`/api/users/${uid}`, {
+      const res = await authFetch(`/api/users/${uid}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status })
       });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `فشل الحفظ (HTTP ${res.status})`);
+      }
+      setUsers(users.map(u => u.uid === uid ? { ...u, status } : u));
       const actionText = status === 'approved' 
         ? `اعتماد وتنشيط حساب المستخدم الجديد بالبوابة: ${uName}` 
         : `رفض تفعيل حساب المستخدم الجديد بالبوابة: ${uName}`;
       logActivity(status === 'approved' ? 'update' : 'del', actionText);
       toastNotice(status === 'approved' ? '✓ تم تنشيط الحساب بنجاح!' : 'تم رفض الحساب.');
-    } catch (err) {
+    } catch (err: any) {
       console.error('API user status update error:', err);
+      toastNotice(`⚠️ لم يتم حفظ التغيير في قاعدة البيانات: ${err.message || 'تعذر الاتصال بالخادم'}`);
     }
   };
 
@@ -487,38 +505,41 @@ export default function App() {
       return;
     }
     const uName = targetUser?.name || 'مستخدم';
-    const updated = users.filter(u => u.uid !== uid);
-    setUsers(updated);
     try {
-      await fetch(`/api/users/${uid}`, {
+      const res = await authFetch(`/api/users/${uid}`, {
         method: 'DELETE'
       });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `فشل الحذف (HTTP ${res.status})`);
+      }
+      setUsers(users.filter(u => u.uid !== uid));
       logActivity('update', `حذف كامل لحساب وعضوية المستخدم: ${uName} من السيرفر.`);
       toastNotice('✓ تم حذف الحساب بنجاح.');
-    } catch (err) {
+    } catch (err: any) {
       console.error('API user delete error:', err);
+      toastNotice(`⚠️ لم يتم حذف الحساب من قاعدة البيانات: ${err.message || 'تعذر الاتصال بالخادم'}`);
     }
   };
 
   const handleUpdateUserRole = async (uid: string, role: 'admin' | 'branch' | 'viewer', branch?: string) => {
     const uName = users.find(u => u.uid === uid)?.name || 'مستخدم';
-    const updated = users.map(u => {
-      if (u.uid === uid) {
-        return { ...u, role, branch };
-      }
-      return u;
-    });
-    setUsers(updated);
     try {
-      await fetch(`/api/users/${uid}`, {
+      const res = await authFetch(`/api/users/${uid}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ role, branch })
       });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `فشل الحفظ (HTTP ${res.status})`);
+      }
+      setUsers(users.map(u => u.uid === uid ? { ...u, role, branch } : u));
       logActivity('update', `تعديل صلاحيات حساب الموظف ${uName} لتصبح: ${role}`);
       toastNotice('✓ تم تعديل الرتبة بنجاح.');
-    } catch (err) {
+    } catch (err: any) {
       console.error('API user role update error:', err);
+      toastNotice(`⚠️ لم يتم حفظ تعديل الرتبة في قاعدة البيانات: ${err.message || 'تعذر الاتصال بالخادم'}`);
     }
   };
 
@@ -530,13 +551,17 @@ export default function App() {
       user: currentUser?.name || 'النظام',
       time: new Date().toISOString().slice(0, 19).replace('T', ' ')
     };
-    setLogs(prev => [newLog, ...prev]);
     try {
-      await fetch(`/api/logs?tenantId=${currentUser?.tenantId || ''}`, {
+      const res = await authFetch(`/api/logs?tenantId=${currentUser?.tenantId || ''}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newLog)
       });
+      if (!res.ok) {
+        console.warn('API log activity rejected by server:', res.status);
+        return;
+      }
+      setLogs(prev => [newLog, ...prev]);
     } catch (err) {
       console.error('API log activity error:', err);
     }
@@ -544,97 +569,97 @@ export default function App() {
 
   // Mutators and state updates
   const handleAddEmployee = async (emp: Employee) => {
-    const updated = [emp, ...employees];
-    setEmployees(updated);
     try {
-      await fetch(`/api/employees?tenantId=${currentUser?.tenantId || ''}`, {
+      const res = await authFetch(`/api/employees?tenantId=${currentUser?.tenantId || ''}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(emp)
       });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `فشل الحفظ (HTTP ${res.status})`);
+      }
+      setEmployees([emp, ...employees]);
       logActivity('add', `إضافة موظف عمالة جديد لقاعدة البيانات: ${emp.name} | رقم الإقامة: ${emp.iqamaNo}`);
-    } catch (err) {
+    } catch (err: any) {
       console.error('API add employee error:', err);
+      alert(`⚠️ لم يتم حفظ الموظف في قاعدة البيانات: ${err.message || 'تعذر الاتصال بالخادم'}`);
     }
   };
 
   const handleDeleteEmployee = async (iqamaNo: string) => {
     const emp = employees.find(e => e.iqamaNo === iqamaNo);
-    const updated = employees.filter(e => e.iqamaNo !== iqamaNo);
-    setEmployees(updated);
-    
-    // Cascading delete related payments too
-    const filteredPayments = payments.filter(p => p.iqamaNo !== iqamaNo);
-    setPayments(filteredPayments);
-
     try {
-      await fetch(`/api/employees/${iqamaNo}`, {
+      const res = await authFetch(`/api/employees/${iqamaNo}`, {
         method: 'DELETE'
       });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `فشل الحذف (HTTP ${res.status})`);
+      }
+      setEmployees(employees.filter(e => e.iqamaNo !== iqamaNo));
+      setPayments(payments.filter(p => p.iqamaNo !== iqamaNo));
       if (emp) {
         logActivity('del', `حذف كلي ونهائي لملف العامل: ${emp.name} من شاشات الإدارة.`);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('API delete employee error:', err);
+      alert(`⚠️ لم يتم حذف الموظف من قاعدة البيانات: ${err.message || 'تعذر الاتصال بالخادم'}`);
     }
   };
 
   const handleArchiveEmployee = async (iqamaNo: string, reason: string) => {
-    const updated = employees.map(e => {
-      if (e.iqamaNo === iqamaNo) {
-        return {
-          ...e,
-          status: 'archived' as const,
-          archiveReason: reason,
-          archiveDate: new Date().toISOString().slice(0, 10)
-        };
+    const emp = employees.find(e => e.iqamaNo === iqamaNo);
+    if (!emp) return;
+    const updatedEmp = {
+      ...emp,
+      status: 'archived' as const,
+      archiveReason: reason,
+      archiveDate: new Date().toISOString().slice(0, 10)
+    };
+    try {
+      const res = await authFetch(`/api/employees?tenantId=${currentUser?.tenantId || ''}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedEmp)
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `فشل الحفظ (HTTP ${res.status})`);
       }
-      return e;
-    });
-    setEmployees(updated);
-    
-    const emp = updated.find(e => e.iqamaNo === iqamaNo);
-    if (emp) {
-      try {
-        await fetch(`/api/employees?tenantId=${currentUser?.tenantId || ''}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(emp)
-        });
-        logActivity('arc', `أرشفة واستبعاد ملف العامل: ${emp.name} — السبب: ${reason}`);
-      } catch (err) {
-        console.error('API archive employee error:', err);
-      }
+      setEmployees(employees.map(e => e.iqamaNo === iqamaNo ? updatedEmp : e));
+      logActivity('arc', `أرشفة واستبعاد ملف العامل: ${emp.name} — السبب: ${reason}`);
+    } catch (err: any) {
+      console.error('API archive employee error:', err);
+      alert(`⚠️ لم يتم حفظ الأرشفة في قاعدة البيانات: ${err.message || 'تعذر الاتصال بالخادم'}`);
     }
   };
 
   const handleRestoreEmployee = async (iqamaNo: string) => {
-    const updated = employees.map(e => {
-      if (e.iqamaNo === iqamaNo) {
-        return {
-          ...e,
-          status: 'active' as const,
-          archiveReason: undefined,
-          archiveDate: undefined
-        };
+    const emp = employees.find(e => e.iqamaNo === iqamaNo);
+    if (!emp) return;
+    const updatedEmp = {
+      ...emp,
+      status: 'active' as const,
+      archiveReason: undefined,
+      archiveDate: undefined
+    };
+    try {
+      const res = await authFetch(`/api/employees?tenantId=${currentUser?.tenantId || ''}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedEmp)
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `فشل الحفظ (HTTP ${res.status})`);
       }
-      return e;
-    });
-    setEmployees(updated);
-    
-    const emp = updated.find(e => e.iqamaNo === iqamaNo);
-    if (emp) {
-      try {
-        await fetch(`/api/employees?tenantId=${currentUser?.tenantId || ''}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(emp)
-        });
-        logActivity('restore', `إلغاء أرشفة وإرجاع الموظف ${emp.name} كنشط في النظام.`);
-        alert(`✓ تم إرجاع ${emp.name} للنظام بنجاح.`);
-      } catch (err) {
-        console.error('API restore employee error:', err);
-      }
+      setEmployees(employees.map(e => e.iqamaNo === iqamaNo ? updatedEmp : e));
+      logActivity('restore', `إلغاء أرشفة وإرجاع الموظف ${emp.name} كنشط في النظام.`);
+      alert(`✓ تم إرجاع ${emp.name} للنظام بنجاح.`);
+    } catch (err: any) {
+      console.error('API restore employee error:', err);
+      alert(`⚠️ لم يتم حفظ الاستعادة في قاعدة البيانات: ${err.message || 'تعذر الاتصال بالخادم'}`);
     }
   };
 
@@ -642,9 +667,13 @@ export default function App() {
     if (confirm("⚠️ تحذير مدمر محاسبي نهائي!\n\nهل أنت متأكد تماماً من رغبتك في حذف وإفراغ كافة بيانات العمالة، والقيود المالية، والدفعات، وسجلات الحركة بالكامل؟\nهذا الإجراء لا يمكن التراجع عنه أبداً وسيتم حذفها من قاعدة البيانات.")) {
       try {
         const tid = currentUser?.tenantId || '';
-        await fetch(`/api/system/wipe?tenantId=${tid}`, {
+        const wipeRes = await authFetch(`/api/system/wipe?tenantId=${tid}`, {
           method: 'POST'
         });
+        if (!wipeRes.ok) {
+          const errData = await wipeRes.json().catch(() => ({}));
+          throw new Error(errData.error || `فشل التصفير (HTTP ${wipeRes.status})`);
+        }
         
         setEmployees([]);
         setPayments([]);
@@ -656,61 +685,61 @@ export default function App() {
           user: currentUser?.name || 'النظام',
           time: new Date().toISOString().slice(0, 19).replace('T', ' ')
         };
-        setLogs([newInitLog]);
         
-        await fetch(`/api/logs?tenantId=${tid}`, {
+        const logRes = await authFetch(`/api/logs?tenantId=${tid}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(newInitLog)
         });
+        if (logRes.ok) {
+          setLogs([newInitLog]);
+        }
         
         alert("🎉 تم تهيئة النظام ومسح كافة البيانات بنجاح!");
-      } catch (err) {
+      } catch (err: any) {
         console.error('API wipe error:', err);
+        alert(`⚠️ لم يتم تصفير قاعدة البيانات بالكامل: ${err.message || 'تعذر الاتصال بالخادم'}`);
       }
     }
   };
 
   const handleUpdateEmployee = async (updatedEmp: Employee) => {
-    const updated = employees.map(e => {
-      if (e.iqamaNo === updatedEmp.iqamaNo) {
-        return updatedEmp;
-      }
-      return e;
-    });
-    setEmployees(updated);
     try {
-      await fetch(`/api/employees?tenantId=${currentUser?.tenantId || ''}`, {
+      const res = await authFetch(`/api/employees?tenantId=${currentUser?.tenantId || ''}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updatedEmp)
       });
-    } catch (err) {
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `فشل الحفظ (HTTP ${res.status})`);
+      }
+      setEmployees(employees.map(e => e.iqamaNo === updatedEmp.iqamaNo ? updatedEmp : e));
+    } catch (err: any) {
       console.error('API update employee error:', err);
+      alert(`⚠️ لم يتم حفظ التعديل في قاعدة البيانات: ${err.message || 'تعذر الاتصال بالخادم'}`);
     }
   };
 
   const handleUpdateEmployeeExpiry = async (iqamaNo: string, newDate: string) => {
-    const updated = employees.map(e => {
-      if (e.iqamaNo === iqamaNo) {
-        return { ...e, iqamaExpiry: newDate };
+    const emp = employees.find(e => e.iqamaNo === iqamaNo);
+    if (!emp) return;
+    const updatedEmp = { ...emp, iqamaExpiry: newDate };
+    try {
+      const res = await authFetch(`/api/employees?tenantId=${currentUser?.tenantId || ''}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedEmp)
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `فشل الحفظ (HTTP ${res.status})`);
       }
-      return e;
-    });
-    setEmployees(updated);
-
-    const emp = updated.find(e => e.iqamaNo === iqamaNo);
-    if (emp) {
-      try {
-        await fetch(`/api/employees?tenantId=${currentUser?.tenantId || ''}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(emp)
-        });
-        logActivity('update', `تحديث مستند انتهاء إقامة الجوازات لـ ${emp.name} إلى ميلادي: ${newDate}`);
-      } catch (err) {
-        console.error('API update employee expiry error:', err);
-      }
+      setEmployees(employees.map(e => e.iqamaNo === iqamaNo ? updatedEmp : e));
+      logActivity('update', `تحديث مستند انتهاء إقامة الجوازات لـ ${emp.name} إلى ميلادي: ${newDate}`);
+    } catch (err: any) {
+      console.error('API update employee expiry error:', err);
+      alert(`⚠️ لم يتم حفظ تحديث تاريخ الانتهاء في قاعدة البيانات: ${err.message || 'تعذر الاتصال بالخادم'}`);
     }
   };
 
@@ -736,16 +765,21 @@ export default function App() {
       hijriYear: y
     };
 
-    setPayments(prev => [newPayment, ...prev]);
     try {
-      await fetch(`/api/payments?tenantId=${currentUser?.tenantId || ''}`, {
+      const res = await authFetch(`/api/payments?tenantId=${currentUser?.tenantId || ''}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newPayment)
       });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `فشل الحفظ (HTTP ${res.status})`);
+      }
+      setPayments(prev => [newPayment, ...prev]);
       logActivity('pay', `تسجيل دفعة نقدية بقيمة ${amount.toLocaleString()} ريال للموظف ${emp?.name} — ببيان: ${type}`);
-    } catch (err) {
+    } catch (err: any) {
       console.error('API register payment error:', err);
+      alert(`⚠️ لم يتم حفظ الدفعة في قاعدة البيانات: ${err.message || 'تعذر الاتصال بالخادم'}`);
     }
   };
 
@@ -756,43 +790,43 @@ export default function App() {
     m?: string,
     y?: string
   ) => {
-    const updated = employees.map(e => {
-      if (e.iqamaNo === iqamaNo) {
-        return {
-          ...e,
-          kafalaCount: (e.kafalaCount || 0) + months
-        };
+    const emp = employees.find(e => e.iqamaNo === iqamaNo);
+    if (!emp) return;
+    const updatedEmp = { ...emp, kafalaCount: (emp.kafalaCount || 0) + months };
+    try {
+      const res = await authFetch(`/api/employees?tenantId=${currentUser?.tenantId || ''}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedEmp)
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `فشل الحفظ (HTTP ${res.status})`);
       }
-      return e;
-    });
-    setEmployees(updated);
-
-    const emp = updated.find(e => e.iqamaNo === iqamaNo);
-    if (emp) {
-      try {
-        await fetch(`/api/employees?tenantId=${currentUser?.tenantId || ''}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(emp)
-        });
-        const addedAmt = months * pricingSettings.kafala;
-        logActivity('update', `تسجيل قيد كفالة مستحقة بذمة ${emp.name} بعدد: ${months} أشهر بقيمة: ${addedAmt} ريال`);
-        alert(`✓ تم تسجيل ${months} أشهر كفالة إضافية ممددة على ذمة العامل ${emp.name}.`);
-      } catch (err) {
-        console.error('API add kafala order error:', err);
-      }
+      setEmployees(employees.map(e => e.iqamaNo === iqamaNo ? updatedEmp : e));
+      const addedAmt = months * pricingSettings.kafala;
+      logActivity('update', `تسجيل قيد كفالة مستحقة بذمة ${emp.name} بعدد: ${months} أشهر بقيمة: ${addedAmt} ريال`);
+      alert(`✓ تم تسجيل ${months} أشهر كفالة إضافية ممددة على ذمة العامل ${emp.name}.`);
+    } catch (err: any) {
+      console.error('API add kafala order error:', err);
+      alert(`⚠️ لم يتم حفظ الكفالة في قاعدة البيانات: ${err.message || 'تعذر الاتصال بالخادم'}`);
     }
   };
 
   // Clear Logs
   const handleClearLogs = async () => {
-    setLogs([]);
     try {
-      await fetch(`/api/logs?tenantId=${currentUser?.tenantId || ''}`, {
+      const res = await authFetch(`/api/logs?tenantId=${currentUser?.tenantId || ''}`, {
         method: 'DELETE'
       });
-    } catch (err) {
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `فشل الحذف (HTTP ${res.status})`);
+      }
+      setLogs([]);
+    } catch (err: any) {
       console.error('API clear logs error:', err);
+      alert(`⚠️ لم يتم مسح السجلات من قاعدة البيانات: ${err.message || 'تعذر الاتصال بالخادم'}`);
     }
   };
 
@@ -800,48 +834,52 @@ export default function App() {
   const handleResetData = async () => {
     const tid = currentUser?.tenantId || '';
     try {
-      await fetch(`/api/system/wipe?tenantId=${tid}`, {
+      const wipeRes = await authFetch(`/api/system/wipe?tenantId=${tid}`, {
         method: 'POST'
       });
-      
+      if (!wipeRes.ok) {
+        const errData = await wipeRes.json().catch(() => ({}));
+        throw new Error(errData.error || `فشل التصفير (HTTP ${wipeRes.status})`);
+      }
       setEmployees([]);
       setPayments([]);
       
       const initialBrs = tid ? [] : INITIAL_BRANCHES;
-      setBranches(initialBrs);
-      await fetch(`/api/branches?tenantId=${tid}`, {
+      const branchesRes = await authFetch(`/api/branches?tenantId=${tid}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(initialBrs)
       });
+      if (branchesRes.ok) setBranches(initialBrs);
       
-      setLogs(INITIAL_LOGS);
-      await fetch(`/api/logs?tenantId=${tid}`, {
+      const logsRes = await authFetch(`/api/logs?tenantId=${tid}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(INITIAL_LOGS[0])
       });
+      if (logsRes.ok) setLogs(INITIAL_LOGS);
       
       const defaultCompanyObj = { name: tid ? `لوحة حسابات ومساحة ${currentUser.name}` : 'برنامج إدارة العمالة المهنية' };
       const defaultPricingObj = { kafala: 250, iqama3: 3550, iqama6: 7100, iqama12: 14200, ramadanFree: true };
-      setCompanySettings(defaultCompanyObj);
-      setPricingSettings(defaultPricingObj);
       
-      await fetch(`/api/company-settings?tenantId=${tid}`, {
+      const compRes = await authFetch(`/api/company-settings?tenantId=${tid}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(defaultCompanyObj)
       });
+      if (compRes.ok) setCompanySettings(defaultCompanyObj);
       
-      await fetch(`/api/pricing-settings?tenantId=${tid}`, {
+      const pricRes = await authFetch(`/api/pricing-settings?tenantId=${tid}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(defaultPricingObj)
       });
+      if (pricRes.ok) setPricingSettings(defaultPricingObj);
       
       toastNotice('تم تصفير وإعادة تعيين قاعدة البيانات بنجاح!');
-    } catch (err) {
+    } catch (err: any) {
       console.error('API reset data error:', err);
+      toastNotice(`⚠️ لم تكتمل عملية إعادة التعيين بالكامل: ${err.message || 'تعذر الاتصال بالخادم'}`);
     }
   };
 
@@ -861,27 +899,32 @@ export default function App() {
   const [toastMsg, setToastMsg] = useState('');
 
   // Add custom branch to settings
-  const handleAddBranch = (e: React.FormEvent) => {
+  const handleAddBranch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newBranchInput.trim()) return;
     if (branches.includes(newBranchInput.trim())) {
       alert('الفرع مسجل مسبقاً في قاعدة النظام');
       return;
     }
-    const updated = [...branches, newBranchInput.trim()];
-    saveBranchesList(updated);
-    setNewBranchInput('');
-    logActivity('update', `إضافة فرع جغرافي جديد لقواعد النظام: ${newBranchInput.trim()}`);
+    const branchName = newBranchInput.trim();
+    const updated = [...branches, branchName];
+    const success = await saveBranchesList(updated);
+    if (success) {
+      setNewBranchInput('');
+      logActivity('update', `إضافة فرع جغرافي جديد لقواعد النظام: ${branchName}`);
+    }
   };
 
-  const handleDeleteBranch = (bName: string) => {
+  const handleDeleteBranch = async (bName: string) => {
     if (employees.some(e => e.branch === bName && e.status === 'active')) {
       alert('عذراً، لا يمكن حذف هذا الفرع لوجود عمال نشطين مسجلين تحت ملفاته الجغرافية');
       return;
     }
     const updated = branches.filter(b => b !== bName);
-    saveBranchesList(updated);
-    logActivity('update', `إبعاد وحذف فرع جغرافي غير مأهول: ${bName}`);
+    const success = await saveBranchesList(updated);
+    if (success) {
+      logActivity('update', `إبعاد وحذف فرع جغرافي غير مأهول: ${bName}`);
+    }
   };
 
   // Add mock profile security users
@@ -906,21 +949,24 @@ export default function App() {
       createdAt: new Date().toISOString()
     };
 
-    saveUsersList([...users, newUser]);
-    setNewUserName('');
-    setNewUserEmail('');
-    
     try {
-      await fetch('/api/users', {
+      const res = await authFetch('/api/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newUser)
       });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `فشل الحفظ (HTTP ${res.status})`);
+      }
+      setUsers(prev => [...prev, newUser]);
+      setNewUserName('');
+      setNewUserEmail('');
       logActivity('update', `دعوة وتسجيل مستخدم برتبة صلاحية جديدة: ${newUserName} (${newUserRole})`);
       toastNotice('✓ تمت إضافة المستخدم لقائمة الصلاحيات وحفظه بقاعدة البيانات بنجاح.');
-    } catch (err) {
+    } catch (err: any) {
       console.error('API save user error:', err);
-      toastNotice('⚠️ خطأ في حفظ بيانات المستخدم الجديد بالسيرفر.');
+      toastNotice(`⚠️ لم يتم حفظ المستخدم في قاعدة البيانات: ${err.message || 'تعذر الاتصال بالخادم'}`);
     }
   };
 
@@ -940,17 +986,22 @@ export default function App() {
       loader.onload = async (event) => {
         const base64 = event.target?.result as string;
         const updated = { ...companySettings, logoBase64: base64 };
-        setCompanySettings(updated);
         try {
-          await fetch(`/api/company-settings?tenantId=${currentUser?.tenantId || ''}`, {
+          const res = await authFetch(`/api/company-settings?tenantId=${currentUser?.tenantId || ''}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(updated)
           });
+          if (!res.ok) {
+            const errData = await res.json().catch(() => ({}));
+            throw new Error(errData.error || `فشل الحفظ (HTTP ${res.status})`);
+          }
+          setCompanySettings(updated);
           logActivity('update', 'تبديل وإدراج شعار رسمي جديد لهوية المؤسسة.');
           alert('✓ تم حفظ الشعار الجديد المرفق بنجاح.');
-        } catch (err) {
+        } catch (err: any) {
           console.error('API save logo error:', err);
+          alert(`⚠️ لم يتم حفظ الشعار: ${err.message || 'تعذر الاتصال بالخادم'}`);
         }
       };
       loader.readAsDataURL(file);
@@ -959,45 +1010,60 @@ export default function App() {
 
   const handleClearCompanyLogo = async () => {
     const updated = { ...companySettings, logoBase64: undefined };
-    setCompanySettings(updated);
     try {
-      await fetch(`/api/company-settings?tenantId=${currentUser?.tenantId || ''}`, {
+      const res = await authFetch(`/api/company-settings?tenantId=${currentUser?.tenantId || ''}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updated)
       });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `فشل الحفظ (HTTP ${res.status})`);
+      }
+      setCompanySettings(updated);
       logActivity('update', 'إزالة الشعار الرسمي المثبت والرجوع للشارة الكلاسيكية.');
       alert('تم مسح الشعار المستورد بنجاح.');
-    } catch (err) {
+    } catch (err: any) {
       console.error('API clear logo error:', err);
+      alert(`⚠️ لم يتم مسح الشعار: ${err.message || 'تعذر الاتصال بالخادم'}`);
     }
   };
 
   const handleSaveCompanySettingsText = async () => {
     try {
-      await fetch(`/api/company-settings?tenantId=${currentUser?.tenantId || ''}`, {
+      const res = await authFetch(`/api/company-settings?tenantId=${currentUser?.tenantId || ''}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(companySettings)
       });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `فشل الحفظ (HTTP ${res.status})`);
+      }
       logActivity('update', `تعديل إعدادات وهوية المؤسسة (المسمى: ${companySettings.name}، صلاحية الكشف للموظفين: ${companySettings.allowLedgerForUsers ? 'مسموح' : 'غير مسموح'}).`);
       alert('✓ تم حفظ إعدادات وهوية المؤسسة بنجاح.');
-    } catch (err) {
+    } catch (err: any) {
       console.error('API save company name error:', err);
+      alert(`⚠️ لم يتم حفظ الإعدادات: ${err.message || 'تعذر الاتصال بالخادم'}`);
     }
   };
 
   const handleSavePricing = async () => {
     try {
-      await fetch(`/api/pricing-settings?tenantId=${currentUser?.tenantId || ''}`, {
+      const res = await authFetch(`/api/pricing-settings?tenantId=${currentUser?.tenantId || ''}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(pricingSettings)
       });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `فشل الحفظ (HTTP ${res.status})`);
+      }
       logActivity('update', 'إعادة ضبط قواعد تسعيرة رسوم الكفالة وتجديدات رخص الإقامة بمشاركة المحاسب.');
       alert('✓ تم حفظ قواعد الأسعار والرسوم بنجاح.');
-    } catch (err) {
+    } catch (err: any) {
       console.error('API save pricing error:', err);
+      alert(`⚠️ لم يتم حفظ الأسعار في قاعدة البيانات: ${err.message || 'تعذر الاتصال بالخادم'}`);
     }
   };
 
@@ -1040,7 +1106,6 @@ export default function App() {
   if (!currentUser) {
     return (
       <PortalAuthView 
-        users={users}
         onLoginSuccess={handleLoginSuccess}
         onRegisterSubmit={handleRegisterSubmit}
         companyName={companySettings.name}
@@ -1087,7 +1152,8 @@ export default function App() {
           <div className="pt-2 border-t border-white/5">
             <button
               onClick={() => {
-                localStorage.removeItem('portal_user');
+                sessionStorage.removeItem('labor_current_user');
+                sessionStorage.removeItem('authToken');
                 window.location.reload();
               }}
               className="text-xs font-bold text-slate-400 hover:text-white transition-colors underline cursor-pointer"
@@ -1333,7 +1399,7 @@ export default function App() {
                   onDeleteUser={handleDeleteUser}
                   toastNotice={toastNotice}
                   onRefreshUsers={async () => {
-                    const res = await fetch('/api/users');
+                    const res = await authFetch('/api/users');
                     if (res.ok) {
                       const data = await res.json();
                       setUsers(data);
@@ -1489,7 +1555,7 @@ export default function App() {
                               {companySettings.logoBase64 ? (
                                 <img src={companySettings.logoBase64} alt="شعار المؤسسة" className="max-h-full max-w-full object-contain" />
                               ) : (
-                                <span className="text-lg">🏢</span>
+                                <DefaultCompanyLogo className="w-full h-full" />
                               )}
                             </div>
                             <div className="flex gap-1.5">

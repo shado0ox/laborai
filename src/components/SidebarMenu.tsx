@@ -5,6 +5,7 @@ import {
   ArrowLeftRight
 } from 'lucide-react';
 import { UserProfile } from '../types';
+import DefaultCompanyLogo from './DefaultCompanyLogo';
 
 interface SidebarMenuProps {
   companyName: string;
@@ -108,7 +109,7 @@ export default function SidebarMenu({
             {logoBase64 ? (
               <img src={logoBase64} alt="شعار الشركة" className="w-full h-full object-contain" />
             ) : (
-              <span className="text-xl font-bold text-yellow-400">🏢</span>
+              <DefaultCompanyLogo className="w-full h-full" />
             )}
           </div>
           <div className="truncate">

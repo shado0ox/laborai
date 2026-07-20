@@ -62,16 +62,35 @@ export default function PortalSpacesView({
   const [editingExpirationDate, setEditingExpirationDate] = useState('');
   const [editingSupportPhone, setEditingSupportPhone] = useState('');
 
+  const authFetch = async (url: string, options: RequestInit = {}) => {
+    const token = sessionStorage.getItem('authToken');
+    const headers = {
+      ...(options.headers || {}),
+    } as Record<string, string>;
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    return fetch(url, {
+      ...options,
+      headers
+    });
+  };
+
   const fetchSpaces = async () => {
     setIsLoading(true);
     try {
-      const res = await fetch(`/api/admin/spaces?callerEmail=${currentUser.email}`);
+      const res = await authFetch('/api/admin/spaces');
       if (res.ok) {
         const data = await res.json();
         setSpaces(data);
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        console.error('Error fetching tenant spaces:', errData.error || res.status);
+        toastNotice(`⚠️ تعذر تحميل مساحات المستخدمين: ${errData.error || `HTTP ${res.status}`}`);
       }
     } catch (err) {
       console.error('Error fetching tenant spaces:', err);
+      toastNotice('⚠️ تعذر الاتصال بالخادم لتحميل مساحات المستخدمين.');
     } finally {
       setIsLoading(false);
     }
@@ -90,7 +109,7 @@ export default function PortalSpacesView({
 
     setIsSubmitting(true);
     try {
-      const res = await fetch(`/api/admin/spaces?callerEmail=${currentUser.email}`, {
+      const res = await authFetch('/api/admin/spaces', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -132,7 +151,7 @@ export default function PortalSpacesView({
   const handleSaveSpaceDetails = async (tenantId: string) => {
     if (!editingCompanyName.trim()) return;
     try {
-      const res = await fetch(`/api/admin/spaces?callerEmail=${currentUser.email}`, {
+      const res = await authFetch('/api/admin/spaces', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -160,7 +179,7 @@ export default function PortalSpacesView({
   const handleRenewSubscription = async (tenantId: string, name: string) => {
     if (!confirm(`هل أنت متأكد من رغبتك في تجديد الاشتراك سنويًا لمساحة (${name})؟ سيتم تمديد تاريخ انتهاء الاشتراك لمدة عام كامل.`)) return;
     try {
-      const res = await fetch(`/api/admin/spaces?callerEmail=${currentUser.email}`, {
+      const res = await authFetch('/api/admin/spaces', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
