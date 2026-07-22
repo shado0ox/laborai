@@ -1,8 +1,9 @@
-@import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;800;900&family=JetBrains+Mono:wght@400;500;700&family=Cairo:wght@700;800;900&display=swap');
 @import "tailwindcss";
 
 @theme {
   --font-sans: 'Tajawal', system-ui, -apple-system, sans-serif;
+  --font-display: 'Cairo', 'Tajawal', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
   
   --color-primary: #0d5189;
@@ -20,6 +21,21 @@
   --color-warning-dark: #92400e;
   --color-warning-mid: #d97706;
   --color-warning-bg: #fff3cd;
+}
+
+/* --- Login portal (PortalAuthView) --- */
+@keyframes portal-sheen-sweep {
+  0% { left: -60%; }
+  100% { left: 140%; }
+}
+@keyframes portal-seal-in {
+  0% { opacity: 0; transform: scale(0.4) rotate(-25deg); }
+  60% { opacity: 1; transform: scale(1.15) rotate(4deg); }
+  100% { opacity: 1; transform: scale(1) rotate(0deg); }
+}
+@keyframes portal-card-in {
+  0% { opacity: 0; transform: translateY(24px); }
+  100% { opacity: 1; transform: translateY(0); }
 }
 
 body {
