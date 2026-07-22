@@ -1015,6 +1015,29 @@ app.post("/api/users", authLimiter, async (req: any, res: any) => {
     finalStatus = "pending";
   }
 
+  // SECURITY / BUSINESS RULE:
+  // هذا المنفذ العام (بدون توكن) يُستخدم فقط لتسجيل شركة جديدة تطلب مساحة خاصة مستقلة (تينانت جديد).
+  // تسجيل أعضاء/مسؤولي الفروع التابعين لشركة قائمة لا يجوز أن يتم إلا من مدير الشركة (مدير المساحة)
+  // وهو مسجّل دخوله فعلياً (Bearer token صالح برتبة admin)، ولا يجوز أبداً أن يحدد الـ tenantId بنفسه.
+  let finalTenantId: string | null;
+  let finalBranch: string | null = u.branch || null;
+
+  if (authUser && authUser.role === "admin") {
+    // مدير شركة قام بتسجيل الدخول ويضيف عضو/مسؤول فرع (أو مستخدم آخر) داخل مساحته الخاصة فقط.
+    finalTenantId = authUser.tenantId || null;
+    if (u.role === "branch" && !finalBranch) {
+      return res.status(400).json({ error: "يجب تحديد الفرع عند إضافة عضو مسؤول فرع." });
+    }
+  } else {
+    // طلب عام غير مُصادق عليه: مسموح فقط بتسجيل شركة جديدة (مساحة خاصة مستقلة)، وليس عضو فرع.
+    if (u.role !== "admin") {
+      return res.status(403).json({ error: "تسجيل أعضاء ومسؤولي الفروع لا يتم إلا عن طريق مدير الشركة من داخل لوحة التحكم بعد تسجيل الدخول." });
+    }
+    // نتجاهل أي tenantId قادم من العميل ونولّد واحداً جديداً موثوقاً من الخادم لضمان عزل المساحة.
+    finalTenantId = `tenant_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
+    finalBranch = null;
+  }
+
   try {
     let passwordToSave = u.password || null;
     if (passwordToSave && !passwordToSave.startsWith("$2a$") && !passwordToSave.startsWith("$2b$")) {
@@ -1035,14 +1058,14 @@ app.post("/api/users", authLimiter, async (req: any, res: any) => {
           u.name,
           u.email,
           u.role,
-          u.branch || null,
+          finalBranch,
           finalStatus,
-          u.tenantId || null,
+          finalTenantId,
           passwordToSave,
           u.createdAt || new Date().toISOString()
         ]
       );
-      const returnedUser = { ...u, status: finalStatus };
+      const returnedUser = { ...u, branch: finalBranch || undefined, tenantId: finalTenantId || undefined, status: finalStatus };
       delete returnedUser.password;
       return res.json({ success: true, user: returnedUser });
     } else {
@@ -1052,7 +1075,7 @@ app.post("/api/users", authLimiter, async (req: any, res: any) => {
       }
 
       const existingIdx = fallbackUsers.findIndex((user) => user.uid === u.uid);
-      const updatedUser = { ...u, status: finalStatus, password: passwordToSave || undefined };
+      const updatedUser = { ...u, branch: finalBranch || undefined, tenantId: finalTenantId || undefined, status: finalStatus, password: passwordToSave || undefined };
       if (existingIdx !== -1) {
         fallbackUsers[existingIdx] = { ...fallbackUsers[existingIdx], ...updatedUser };
       } else {
@@ -1075,10 +1098,18 @@ app.put("/api/users/:uid", requireAuth, async (req: any, res: any) => {
   }
   const updates = parseResult.data;
   const callerEmail = req.user?.email || "";
+  const callerIsDev = isDevEmail(callerEmail);
+  const callerTenantId = req.user?.tenantId || "";
   try {
     if (pool) {
-      const dbUsers: any = await runQuery("SELECT email FROM users WHERE uid = ?", [uid]);
+      const dbUsers: any = await runQuery("SELECT email, tenant_id FROM users WHERE uid = ?", [uid]);
       const isDev = (dbUsers && dbUsers.length > 0 && dbUsers[0].email === DEV_EMAIL) || uid === "user-admin";
+
+      // SECURITY: مدير الشركة لا يجوز أن يعدّل صلاحيات أو فروع مستخدمين من مساحة/شركة أخرى.
+      if (!callerIsDev && dbUsers && dbUsers.length > 0 && (dbUsers[0].tenant_id || "") !== callerTenantId) {
+        return res.status(403).json({ error: "لا تملك صلاحية تعديل مستخدم خارج نطاق مساحتك (شركتك) الخاصة." });
+      }
+
       if (isDev) {
         if (callerEmail !== DEV_EMAIL) {
           return res.status(403).json({ error: "لا يمكن تعديل حساب المطور الرئيسي إلا للمطور نفسه!" });
@@ -1108,6 +1139,11 @@ app.put("/api/users/:uid", requireAuth, async (req: any, res: any) => {
     } else {
       const targetUser = fallbackUsers.find((u) => u.uid === uid);
       const isDev = (targetUser && targetUser.email === DEV_EMAIL) || uid === "user-admin";
+
+      if (!callerIsDev && targetUser && (targetUser.tenantId || "") !== callerTenantId) {
+        return res.status(403).json({ error: "لا تملك صلاحية تعديل مستخدم خارج نطاق مساحتك (شركتك) الخاصة." });
+      }
+
       if (isDev) {
         if (callerEmail !== DEV_EMAIL) {
           return res.status(403).json({ error: "لا يمكن تعديل حساب المطور الرئيسي إلا للمطور نفسه!" });
@@ -1134,12 +1170,17 @@ app.put("/api/users/:uid", requireAuth, async (req: any, res: any) => {
 
 app.delete("/api/users/:uid", requireAuth, async (req: any, res: any) => {
   const { uid } = req.params;
+  const callerIsDev = isDevEmail(req.user?.email || "");
+  const callerTenantId = req.user?.tenantId || "";
   try {
     if (pool) {
-      const dbUsers: any = await runQuery("SELECT email FROM users WHERE uid = ?", [uid]);
+      const dbUsers: any = await runQuery("SELECT email, tenant_id FROM users WHERE uid = ?", [uid]);
       const isDev = (dbUsers && dbUsers.length > 0 && dbUsers[0].email === DEV_EMAIL) || uid === "user-admin";
       if (isDev) {
         return res.status(403).json({ error: "لا يمكن حذف حساب مطور البرنامج الرئيسي نهائياً!" });
+      }
+      if (!callerIsDev && dbUsers && dbUsers.length > 0 && (dbUsers[0].tenant_id || "") !== callerTenantId) {
+        return res.status(403).json({ error: "لا تملك صلاحية حذف مستخدم خارج نطاق مساحتك (شركتك) الخاصة." });
       }
       await runQuery("DELETE FROM users WHERE uid = ?", [uid]);
       return res.json({ success: true });
@@ -1148,6 +1189,9 @@ app.delete("/api/users/:uid", requireAuth, async (req: any, res: any) => {
       const isDev = (targetUser && targetUser.email === DEV_EMAIL) || uid === "user-admin";
       if (isDev) {
         return res.status(403).json({ error: "لا يمكن حذف حساب مطور البرنامج الرئيسي نهائياً!" });
+      }
+      if (!callerIsDev && targetUser && (targetUser.tenantId || "") !== callerTenantId) {
+        return res.status(403).json({ error: "لا تملك صلاحية حذف مستخدم خارج نطاق مساحتك (شركتك) الخاصة." });
       }
       fallbackUsers = fallbackUsers.filter((u) => u.uid !== uid);
       return res.json({ success: true });

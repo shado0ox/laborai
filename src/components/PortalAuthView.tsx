@@ -44,14 +44,15 @@ export default function PortalAuthView({
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
-  const [isDeveloperMode, setIsDeveloperMode] = useState(false);
 
   // Register Form States
+  // ملاحظة: التسجيل العام (بدون تسجيل دخول) أصبح مقتصراً على تسجيل شركة/منشأة جديدة تطلب
+  // مساحة خاصة مستقلة فقط. تسجيل أعضاء ومسؤولي الفروع التابعين لمنشأة قائمة لا يتم إلا من
+  // داخل لوحة تحكم مدير الشركة (مدير المساحة)، لأن قائمة الفروع الحقيقية تنتمي لمساحة/تينانت
+  // محدد ولا يمكن للزائر غير المسجل معرفتها أو اختيار فرع وهمي.
   const [regName, setRegName] = useState('');
   const [regEmail, setRegEmail] = useState('');
   const [regPassword, setRegPassword] = useState('');
-  const [regType, setRegType] = useState<'private' | 'sub'>('private');
-  const [regBranch, setRegBranch] = useState('');
   const [regSuccess, setRegSuccess] = useState(false);
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -97,17 +98,16 @@ export default function PortalAuthView({
     }
 
     const newUid = `user_uid_${Date.now()}`;
-    const newTenantId = regType === 'private' ? `tenant_${Date.now()}_${Math.random().toString(36).substr(2, 4)}` : undefined;
 
+    // التسجيل العام هنا مخصص فقط لمنشأة جديدة تحصل على مساحة خاصة مستقلة (تينانت جديد وحساب مدير).
+    // الخادم هو من يحدد ويولّد tenantId الحقيقي بعد الاعتماد، لضمان عزل كل مساحة عن الأخرى.
     const newUserObj: UserProfile = {
       uid: newUid,
       name: regName,
       email: regEmail,
-      role: regType === 'private' ? 'admin' : 'branch', 
-      branch: regType === 'sub' ? (regBranch || 'فرع الرياض الأساسي') : undefined,
+      role: 'admin',
       password: regPassword,
       status: 'pending',
-      tenantId: newTenantId,
       createdAt: new Date().toISOString()
     };
 
@@ -226,25 +226,6 @@ export default function PortalAuthView({
               </div>
             </div>
 
-            {/* Developer Login Toggle Option */}
-            <div className="flex items-center justify-between p-3 bg-slate-900/40 rounded-xl border border-slate-800/60 select-none">
-              <label className="flex items-center gap-2 cursor-pointer text-right w-full">
-                <input 
-                  type="checkbox"
-                  checked={isDeveloperMode}
-                  onChange={(e) => {
-                    const checked = e.target.checked;
-                    setIsDeveloperMode(checked);
-                  }}
-                  className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 bg-slate-950 border-slate-800 cursor-pointer"
-                />
-                <div className="flex flex-col text-right">
-                  <span className="text-[11px] text-amber-500 font-black">دخول لوحة مطور النظام 💻</span>
-                  <span className="text-[9px] text-slate-500">خاص بصيانة البرمجة وتفعيل المشتركين</span>
-                </div>
-              </label>
-            </div>
-
             {loginError && (
               <div className="p-3 bg-red-950/45 border border-red-900/30 text-rose-350 text-[11px] rounded-lg font-bold leading-normal">
                 {loginError}
@@ -319,60 +300,23 @@ export default function PortalAuthView({
               </div>
             </div>
 
-            {/* Account Isolation Space Selection */}
+            {/* Account Isolation Space Info */}
             <div className="space-y-2 border-t border-slate-900 pt-3">
-              <label className="text-[11px] text-slate-400 font-bold block">تخصيص المساحة للتطبيق (برنامج مستقل):</label>
-              
-              <div className="space-y-1.5 grid grid-cols-1 select-none">
-                <label className={`p-3 rounded-xl border flex flex-col text-right cursor-pointer transition-all ${regType === 'private' ? 'bg-amber-600/10 border-amber-500' : 'bg-slate-900 border-slate-800 hover:border-slate-700'}`}>
-                  <div className="flex items-center gap-2">
-                    <input 
-                      type="radio" 
-                      name="reg_type" 
-                      checked={regType === 'private'} 
-                      onChange={() => setRegType('private')} 
-                      className="accent-amber-500 text-amber-500 scale-105" 
-                    />
-                    <span className="font-extrabold text-xs text-white">💼 مساحة خاصة مستقلة (برنامج خاص بك)</span>
-                  </div>
-                  <span className="text-[9px] text-slate-400 mt-1 mr-5 font-normal">
-                    تحصل على مساحة عمالة خاصة ومنفصلة كلياً عن عمالة المؤسسة، سيبدو البرنامج كأنه محفظتك لوحدك.
-                  </span>
-                </label>
+              <div className="p-3 rounded-xl border bg-amber-600/10 border-amber-500 flex flex-col text-right">
+                <span className="font-extrabold text-xs text-white">💼 مساحة خاصة مستقلة (برنامج خاص بمنشأتك)</span>
+                <span className="text-[9px] text-slate-400 mt-1 font-normal">
+                  هذا التسجيل مخصص للمنشآت الجديدة فقط: ستحصل منشأتك على مساحة عمالة خاصة ومنفصلة كلياً، وسيتم تعيينك مديراً لها بعد الاعتماد.
+                </span>
+              </div>
 
-                <label className={`p-3 rounded-xl border flex flex-col text-right cursor-pointer transition-all ${regType === 'sub' ? 'bg-amber-600/10 border-amber-500' : 'bg-slate-900 border-slate-800 hover:border-slate-700'}`}>
-                  <div className="flex items-center gap-2">
-                    <input 
-                      type="radio" 
-                      name="reg_type" 
-                      checked={regType === 'sub'} 
-                      onChange={() => setRegType('sub')} 
-                      className="accent-amber-500 text-amber-500 scale-105" 
-                    />
-                    <span className="font-extrabold text-xs text-white">🏢 عضو ومسؤول فرع تحت المنشأة الأساسية</span>
-                  </div>
-                  <span className="text-[9px] text-slate-400 mt-1 mr-5 font-normal">
-                    تنضم كمشرف مساعد أو مشاهد يتم توجيه ومعالجة طلبك بواسطة المشرف شادي ناصف بمقر العمل الحالي.
-                  </span>
-                </label>
+              <div className="p-3 rounded-xl border bg-slate-900 border-slate-800 flex flex-col text-right">
+                <span className="font-extrabold text-[11px] text-slate-300">🏢 هل أنت عضو أو مسؤول فرع تابع لمنشأة قائمة؟</span>
+                <span className="text-[9px] text-slate-400 mt-1 font-normal leading-relaxed">
+                  لا يتم تسجيل حسابات الفروع من هنا. يرجى التواصل مع مدير الشركة (مدير المساحة) الخاص بمنشأتك،
+                  حيث يقوم هو فقط بإضافتك وتحديد فرعك الصحيح من داخل لوحة التحكم بعد تسجيل دخوله.
+                </span>
               </div>
             </div>
-
-            {regType === 'sub' && (
-              <div className="space-y-1.5 animate-in slide-in-from-top-2 duration-100">
-                <label className="text-[11px] text-slate-400 block font-bold">تحديد فرع المؤسسة المراد الإشراف عليه:</label>
-                <select
-                  value={regBranch}
-                  onChange={(e) => setRegBranch(e.target.value)}
-                  className="w-full bg-slate-900 text-white rounded-xl border border-slate-800 py-2 px-3 text-xs font-semibold focus:outline-none"
-                >
-                  <option value="فرع الرياض الأساسي">فرع الرياض الأساسي 🏢</option>
-                  <option value="فرع جدة الغربية">فرع جدة الغربية 🌊</option>
-                  <option value="فرع الدمام الشرقية">فرع الدمام الشرقية 🌴</option>
-                  <option value="فرع مكة المكرمة">فرع مكة المكرمة 🕋</option>
-                </select>
-              </div>
-            )}
 
             <button
               type="submit"
