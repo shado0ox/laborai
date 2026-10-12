@@ -40,6 +40,7 @@ with sync_playwright() as p:
     row.get_by_role('button',name='كشف الحساب',exact=True).click()
     expect(page.get_by_text('آخر شهر سُجل له تحصيل كفالة',exact=True)).to_be_visible()
     assert 'جمادى الآخرة 1448' in page.locator('main').inner_text()
+    expect(page.get_by_text('آخر شهر كفالة محسوب',exact=True)).to_be_visible()
     page.screenshot(path=str(out/'worker-statement-desktop.png'),full_page=True)
     page.reload(); page.wait_for_load_state('networkidle'); nav('ملفات العمالة')
     page.get_by_role('row').filter(has_text='عامل تجريبي 1').get_by_role('button',name='كشف الحساب',exact=True).click()

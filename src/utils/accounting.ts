@@ -97,3 +97,23 @@ export function cashbookSummary(transactions: CashTransaction[], from = '', to =
   });
   return { opening:openingCents/100, rows, received, paid, net:net(period)/100, ending:running/100, sources };
 }
+
+export function lastCalculatedKafala(payments: Payment[]): string {
+  const normalize = (value: string) => value.replace(/[أإآ]/g,'ا').replace(/ى/g,'ي').replace(/[\u064b-\u065f]/g,'').replace(/[٠-٩]/g,digit=>String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)));
+  const aliases = HIJRI_MONTH_NAMES.map((name,index)=>({name:normalize(name),month:index+1}));
+  aliases.push({name:'ربيع الثاني',month:4},{name:'ربيع ثاني',month:4},{name:'ربيع اخر',month:4},{name:'جمادي الثانيه',month:6},{name:'جمادي الثانية',month:6});
+  const candidates: {month:number;year:number}[] = [];
+  for (const payment of payments.filter(payment=>isDebt(payment) && (payment.category==='kafala' || payment.type?.includes('كفالة')))) {
+    if (payment.kafalaPeriod && validHijriPeriod(payment.kafalaPeriod)) {
+      candidates.push({month:payment.kafalaPeriod.toMonth,year:payment.kafalaPeriod.toYear}); continue;
+    }
+    // Legacy start metadata is not an end date. Only accept a written, explicit endpoint.
+    const text = normalize(`${payment.type || ''} ${payment.notes || ''}`);
+    for (const alias of aliases) {
+      const expression = new RegExp(`(?:الي|الى|حتي|حتى)\\s*(?:شهر\\s*)?${alias.name}\\s*(?:(?:عام|سنة)\\s*)?(1[3-6][0-9]{2}|1700)(?![0-9])`,'g');
+      for (const match of text.matchAll(expression)) candidates.push({month:alias.month,year:Number(match[1])});
+    }
+  }
+  candidates.sort((a,b)=>b.year*12+b.month-(a.year*12+a.month));
+  return candidates.length ? `${HIJRI_MONTH_NAMES[candidates[0].month-1]} ${candidates[0].year}` : 'لم تُحدد فترة كفالة محسوبة';
+}

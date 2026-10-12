@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cashTransactions, employeeDues, hijriPeriodMonths, journalLines, lastPaidKafala, payableHijriMonths, shopStatement, validHijriPeriod } from '../src/utils/accounting.ts';
+import { cashTransactions, employeeDues, hijriPeriodMonths, journalLines, lastPaidKafala, lastCalculatedKafala, payableHijriMonths, shopStatement, validHijriPeriod } from '../src/utils/accounting.ts';
 import type { Employee, Payment, PricingSettings, ShopEntry } from '../src/types.ts';
 
 const pricing: PricingSettings = { kafala: 250, iqama3: 100, iqama6: 200, iqama12: 400, ramadanFree: false };
@@ -78,4 +78,14 @@ test('explicit non-cash manual adjustments remain stored but never enter cash or
   const entries = [{ id:'noncash', date:'2026-01-01', bayan:'Approved waiver', debit:25, credit:0, cashEffect:'noncash' as const }, {id:'cash',date:'2026-01-01',bayan:'Actual receipt',debit:0,credit:25}];
   const cash = cashTransactions([],entries,[]);
   assert.equal(cash.length,1); assert.equal(cash[0].receipt,25); assert.equal(entries.length,2);
+});
+
+
+test('last calculated kafala uses debt endpoint and explicit legacy notes, never generic cash coverage', () => {
+  const legacy=payment({ type:'قيد مديونية: إثبات كفالة', transactionKind:'debt', hijriMonth:'شوال', hijriYear:'1448', notes:'حساب من شهر شوال 1447 الي ربيع ثاني 1448' });
+  assert.equal(lastCalculatedKafala([legacy]),'ربيع الآخر 1448');
+  assert.equal(lastCalculatedKafala([payment({type:'تسوية رصيد',transactionKind:'receipt'})]),'لم تُحدد فترة كفالة محسوبة');
+  assert.equal(lastCalculatedKafala([legacy,payment({transactionKind:'debt',kafalaPeriod:{fromMonth:1,fromYear:1448,toMonth:6,toYear:1448}})]),'جمادى الآخرة 1448');
+  assert.equal(lastCalculatedKafala([{...legacy,notes:'من شوال إلى ربيع الآخر',hijriYear:'1448'}]),'لم تُحدد فترة كفالة محسوبة');
+  assert.equal(lastCalculatedKafala([{...legacy,notes:'من شوال ١٤٤٧ إلى ربيع الآخر ١٤٤٨'}]),'ربيع الآخر 1448');
 });
