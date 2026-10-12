@@ -146,3 +146,16 @@ select { background-color: white; color: var(--ink); }
 .employee-actions-menu [role=menuitem]:hover, .employee-actions-menu [role=menuitem]:focus-visible { background: #edf5f5; }
 .employee-actions-menu [role=menuitem].employee-action-danger { color: #b91c1c; }
 @media (max-width: 600px) { .employee-actions-menu { top: auto !important; bottom: max(12px,env(safe-area-inset-bottom)); left: 12px !important; right: 12px; width: auto; } }
+
+.field { display: block; width: 100%; min-height: 42px; padding: 9px 12px; border: 1px solid #c1ced7; border-radius: 8px; background: #fff; color: #172e45; font-size: 14px; }
+.accounting-panel { border: 1px solid #d9e2e8; border-radius: 12px; background: white; padding: 20px; }
+.accounting-table { width: 100%; border-collapse: collapse; text-align: right; font-size: 13px; font-variant-numeric: tabular-nums; }
+.accounting-table th { background: #172e45; color: white; padding: 12px; white-space: nowrap; }
+.accounting-table td { padding: 12px; border-bottom: 1px solid #e3eaf0; white-space: nowrap; }
+.accounting-table td.description { white-space: normal; min-width: 200px; max-width: 340px; }
+
+.finance-button { padding: 9px 14px; min-height: 42px; border: 1px solid #c1ced7; border-radius: 8px; background: #fff; color: #172e45; font-size: 13px; font-weight: 700; }
+.finance-button:hover { background: #edf4f5; }
+.finance-button.primary { background: #176b72; border-color: #176b72; color: white; }
+.finance-button:disabled { opacity: .6; }
+.finance-error { padding: 12px 16px; color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; font-size: 14px; }

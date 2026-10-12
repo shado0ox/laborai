@@ -1,3 +1,4 @@
+import { employeeDues } from '../utils/accounting';
 import { isEmployeeCredit } from '../utils/paymentKind';
 import React from 'react';
 import { Employee, Payment, PricingSettings } from '../types';
@@ -39,7 +40,7 @@ export default function AlertsListView({
   const debtorsList = activeEmployees.map(e => {
     const empPays = payments.filter(p => (p.iqamaNo === e.iqamaNo) && isEmployeeCredit(p));
     const paid = empPays.reduce((sum, p) => sum + (p.amount || 0), 0);
-    const due = (e.iqamaBalance || 0) + (e.kafalaCount * pricing.kafala) + (e.otherDebt || 0);
+    const due = employeeDues(e, pricing, payments);
     const balance = paid - due;
     return { ...e, balance };
   })

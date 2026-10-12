@@ -74,6 +74,7 @@ export default function SidebarMenu({
     },
     { id: 'payments', label: 'المدفوعات والتحصيلات', icon: <Coins className="w-5 h-5" />, section: 'المالية' },
     ...(showLedger ? [{ id: 'general_ledger', label: 'كشف الوارد والصادر العام', icon: <ArrowLeftRight className="w-5 h-5" />, section: 'المالية' }] : []),
+    ...(currentUser.role !== 'viewer' || allowLedgerForUsers ? [{ id: 'shop_accounts', label: 'حسابات المحلات والفروع', icon: <Building className="w-5 h-5" />, section: 'المالية' }] : []),
     { id: 'monthly', label: 'التقرير الهجري المالي', icon: <CalendarDays className="w-5 h-5" />, section: 'المالية' },
     { id: 'archive', label: 'الأرشيف والمستبعدين', icon: <Archive className="w-5 h-5" />, section: 'قواعد البيانات' },
     { id: 'settings', label: 'إعدادات الشركة', icon: <Settings className="w-5 h-5" />, section: 'الإدارة العامة' }

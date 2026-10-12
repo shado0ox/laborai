@@ -1,3 +1,4 @@
+import { validHijriPeriod } from './src/utils/accounting';
 import { getPaymentKind } from './src/utils/paymentKind';
 import express from "express";
 import path from "path";
@@ -177,7 +178,18 @@ const employeeSchema = z.object({
   kafalaStartYear: z.string().optional().nullable(),
 });
 
+const hijriPeriodSchema = z.object({
+  fromMonth: z.number().int().min(1).max(12), fromYear: z.number().int().min(1300).max(1700),
+  toMonth: z.number().int().min(1).max(12), toYear: z.number().int().min(1300).max(1700),
+  freeFromMonth: z.number().int().min(1).max(12).optional(), freeFromYear: z.number().int().min(1300).max(1700).optional(),
+  freeToMonth: z.number().int().min(1).max(12).optional(), freeToYear: z.number().int().min(1300).max(1700).optional()
+}).refine(validHijriPeriod, { message: "فترة الكفالة غير صحيحة أو فترة الإعفاء خارجها." });
+
 const paymentSchema = z.object({
+  category: z.enum(["kafala", "iqama", "insurance", "other"]).optional(),
+  balanceIncluded: z.boolean().optional(),
+  kafalaPeriod: hijriPeriodSchema.optional(),
+  cashAccount: z.enum(["cash", "bank"]).optional(),
   transactionKind: z.enum(["receipt", "debt", "discount", "settlement"]).optional(),
   id: z.string().min(1, "معرف الدفعة مطلوب"),
   iqamaNo: z.string().min(1, "رقم الإقامة مطلوب"),
@@ -192,6 +204,8 @@ const paymentSchema = z.object({
 });
 
 const generalLedgerSchema = z.object({
+  branch: z.string().max(150).optional(), category: z.string().max(150).optional(), reference: z.string().max(100).optional(),
+  cashAccount: z.enum(["cash", "bank"]).optional(), counterpartAccount: z.string().max(150).optional(),
   id: z.string().min(1, "المعرف مطلوب"),
   date: dateSchema("القيد"),
   bayan: z.string().min(1, "البيان مطلوب"),
@@ -692,7 +706,12 @@ async function initializeTables() {
       );
     `);
 
-    await client.query("ALTER TABLE payments ADD COLUMN IF NOT EXISTS transaction_kind VARCHAR(20)");
+    await client.query(`ALTER TABLE payments
+      ADD COLUMN IF NOT EXISTS transaction_kind VARCHAR(20),
+      ADD COLUMN IF NOT EXISTS category VARCHAR(20),
+      ADD COLUMN IF NOT EXISTS balance_included BOOLEAN,
+      ADD COLUMN IF NOT EXISTS kafala_period JSONB,
+      ADD COLUMN IF NOT EXISTS cash_account VARCHAR(10)`);
 
     // 4. Pricing Settings table
     await client.query(`
@@ -770,6 +789,22 @@ async function initializeTables() {
         created_at VARCHAR(100)
       );
     `);
+
+    await client.query(`ALTER TABLE general_ledger
+      ADD COLUMN IF NOT EXISTS branch VARCHAR(150), ADD COLUMN IF NOT EXISTS category VARCHAR(150),
+      ADD COLUMN IF NOT EXISTS reference VARCHAR(100), ADD COLUMN IF NOT EXISTS cash_account VARCHAR(10),
+      ADD COLUMN IF NOT EXISTS counterpart_account VARCHAR(150)`);
+    await client.query(`CREATE TABLE IF NOT EXISTS shop_entries (
+      tenant_id VARCHAR(128) NOT NULL DEFAULT '', id VARCHAR(128) NOT NULL,
+      branch VARCHAR(150) NOT NULL, date DATE NOT NULL, year INTEGER NOT NULL,
+      kind VARCHAR(20) NOT NULL, amount NUMERIC(12,2) NOT NULL CHECK (amount > 0),
+      category VARCHAR(150) NOT NULL, description TEXT NOT NULL, reference VARCHAR(100),
+      responsible VARCHAR(255), notes TEXT, paid_by_company BOOLEAN NOT NULL DEFAULT FALSE,
+      cash_account VARCHAR(10) NOT NULL DEFAULT 'cash', created_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (tenant_id, id)
+    )`);
+
+    await client.query("CREATE UNIQUE INDEX IF NOT EXISTS shop_reference_unique ON shop_entries (tenant_id, branch, reference) WHERE reference IS NOT NULL AND reference <> ''");
 
     // Non-destructive upgrade: tenant + record ID is the ownership boundary.
     await client.query("BEGIN");
@@ -871,6 +906,7 @@ let fallbackPricing: Map<string, any> = new Map([
   ["", { kafala: 250, iqama3: 3550, iqama6: 7100, iqama12: 14200, ramadanFree: true }]
 ]);
 let fallbackGeneralLedger: any[] = [];
+let fallbackShopEntries: any[] = [];
 
 
 // --- API ROUTES ---
@@ -1386,6 +1422,8 @@ app.get("/api/payments", requireAuth, async (req: any, res: any) => {
         amount: Number(r.amount || 0),
         type: r.type,
         transactionKind: getPaymentKind({ type: r.type, transactionKind: r.transaction_kind }),
+        category: r.category || undefined, balanceIncluded: r.balance_included ?? true,
+        kafalaPeriod: r.kafala_period || undefined, cashAccount: r.cash_account || undefined,
         date: r.date ? r.date.toISOString().slice(0, 10) : "",
         notes: r.notes || undefined,
         hijriMonth: r.hijri_month || undefined,
@@ -1423,11 +1461,11 @@ app.post("/api/payments", requireAuth, async (req: any, res: any) => {
     if (pool) {
       // Cleaned PostgreSQL upsert
       const saved = await runQuery(
-        `INSERT INTO payments (id, iqama_no, name, branch, amount, type, date, notes, hijri_month, hijri_year, tenant_id, transaction_kind)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO payments (id, iqama_no, name, branch, amount, type, date, notes, hijri_month, hijri_year, tenant_id, transaction_kind, category, balance_included, kafala_period, cash_account)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (tenant_id, id) DO UPDATE SET
            name=EXCLUDED.name, branch=EXCLUDED.branch, amount=EXCLUDED.amount, type=EXCLUDED.type, 
-           date=EXCLUDED.date, notes=EXCLUDED.notes, hijri_month=EXCLUDED.hijri_month, hijri_year=EXCLUDED.hijri_year, transaction_kind=EXCLUDED.transaction_kind
+           date=EXCLUDED.date, notes=EXCLUDED.notes, hijri_month=EXCLUDED.hijri_month, hijri_year=EXCLUDED.hijri_year, transaction_kind=EXCLUDED.transaction_kind, category=EXCLUDED.category, balance_included=EXCLUDED.balance_included, kafala_period=EXCLUDED.kafala_period, cash_account=EXCLUDED.cash_account
            WHERE (? = 'admin' OR payments.branch = ?) AND payments.iqama_no = EXCLUDED.iqama_no RETURNING id`,
         [
           p.id,
@@ -1440,7 +1478,7 @@ app.post("/api/payments", requireAuth, async (req: any, res: any) => {
           p.notes || null,
           p.hijriMonth || null,
           p.hijriYear || null,
-          tenantId, p.transactionKind, req.user.role, req.user.branch || ""
+          tenantId, p.transactionKind, p.category || null, p.balanceIncluded ?? true, p.kafalaPeriod ? JSON.stringify(p.kafalaPeriod) : null, p.cashAccount || 'cash', req.user.role, req.user.branch || ""
         ]
       );
       if (!saved.length) return res.status(403).json({ error: "الدفعة خارج نطاق فرعك أو تخص موظفاً آخر." });
@@ -1475,6 +1513,74 @@ app.delete("/api/payments/:id", requireAuth, async (req: any, res: any) => {
   } catch (err) { return sendServerError(res, err); }
 });
 
+const shopEntrySchema = z.object({
+  id: z.string().min(1).max(128), branch: z.string().min(1).max(150), date: dateSchema('الحركة'),
+  year: z.number().int().min(1900).max(2200), kind: z.enum(['charge', 'receipt', 'opening', 'discount']),
+  amount: positiveNumericSchema('المبلغ').refine(value => Math.abs(value * 100 - Math.round(value * 100)) < 0.000001, 'المبلغ يقبل منزلتين عشريتين فقط'),
+  category: z.string().min(1).max(150), description: z.string().min(1).max(4000),
+  reference: z.string().max(100).optional(), responsible: z.string().max(255).optional(), notes: z.string().max(4000).optional(),
+  paidByCompany: z.boolean().optional().default(false), cashAccount: z.enum(['cash', 'bank']).optional().default('cash')
+}).refine(entry => !entry.paidByCompany || entry.kind === 'charge', { message: 'الدفع من الشركة يخص المصروف المحمل على المسؤول فقط.' });
+
+const mapShopEntry = (row: any) => ({ id: row.id, branch: row.branch, date: row.date instanceof Date ? row.date.toISOString().slice(0,10) : String(row.date).slice(0,10), year: row.year, kind: row.kind, amount: Number(row.amount), category: row.category, description: row.description, reference: row.reference || '', responsible: row.responsible || '', notes: row.notes || '', paidByCompany: row.paid_by_company, cashAccount: row.cash_account, createdAt: row.created_at });
+
+app.get('/api/shop-entries', requireAuth, async (req: any, res) => {
+  if (req.user.role === 'viewer' && !(req.company?.allow_ledger_for_users || req.company?.allowLedgerForUsers)) return res.status(403).json({ error: 'الوصول لحسابات المحلات غير مسموح.' });
+  const tenantId = getTenantId(req);
+  try {
+    const entries = pool ? (await runQuery("SELECT * FROM shop_entries WHERE tenant_id = ? ORDER BY date, created_at, id", [tenantId])).map(mapShopEntry) : fallbackShopEntries.filter(entry => entry.tenantId === tenantId);
+    return res.json(entries.filter((entry: any) => inBranch(req, entry.branch)));
+  } catch (error) { return sendServerError(res, error); }
+});
+
+app.post('/api/shop-entries', requireAuth, requireAdmin, async (req: any, res) => {
+  const parsed = shopEntrySchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: formatZodError(parsed.error) });
+  const entry = parsed.data, tenantId = getTenantId(req);
+  try {
+    const branches = pool ? (await runQuery('SELECT name FROM branches WHERE tenant_id = ? AND name = ?', [tenantId, entry.branch])).length > 0 : (fallbackBranches.get(tenantId) || []).includes(entry.branch);
+    if (!branches) return res.status(400).json({ error: 'اختر فرعاً تابعاً لشركتك.' });
+    if (pool) {
+      const rows = await runQuery(`INSERT INTO shop_entries (tenant_id, id, branch, date, year, kind, amount, category, description, reference, responsible, notes, paid_by_company, cash_account)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (tenant_id, id) DO NOTHING RETURNING *`,
+        [tenantId, entry.id, entry.branch, entry.date, entry.year, entry.kind, entry.amount, entry.category, entry.description, entry.reference || null, entry.responsible || null, entry.notes || null, entry.paidByCompany, entry.cashAccount]);
+      if (!rows.length) {
+        const existing = mapShopEntry((await runQuery('SELECT * FROM shop_entries WHERE tenant_id = ? AND id = ?', [tenantId, entry.id]))[0]);
+        if (existing.branch !== entry.branch || existing.amount !== entry.amount || existing.kind !== entry.kind || existing.date !== entry.date || existing.description !== entry.description || existing.category !== entry.category || existing.year !== entry.year || existing.reference !== (entry.reference || '') || existing.notes !== (entry.notes || '') || existing.responsible !== (entry.responsible || '') || existing.paidByCompany !== entry.paidByCompany || existing.cashAccount !== entry.cashAccount) return res.status(409).json({ error: 'رقم الحركة مستخدم بحركة مختلفة.' });
+        return res.json({ success: true, entry: existing });
+      }
+      return res.status(201).json({ success: true, entry: mapShopEntry(rows[0]) });
+    }
+    const existing = fallbackShopEntries.find(item => item.tenantId === tenantId && item.id === entry.id);
+    if (existing) {
+      if (Object.keys(entry).some(key => existing[key] !== entry[key])) return res.status(409).json({ error: 'رقم الحركة مستخدم بحركة مختلفة.' });
+      return res.json({ success: true, entry: existing });
+    }
+    if (entry.reference && fallbackShopEntries.some(item => item.tenantId === tenantId && item.branch === entry.branch && item.reference === entry.reference)) return res.status(409).json({ error: 'مرجع المستند موجود لهذا الفرع بالفعل.' });
+    const saved = { ...entry, tenantId, createdAt: new Date().toISOString() };
+    fallbackShopEntries.push(saved);
+    return res.status(201).json({ success: true, entry: saved });
+  } catch (error: any) {
+    if (error.code === '23505') return res.status(409).json({ error: 'مرجع المستند موجود لهذا الفرع بالفعل.' });
+    return sendServerError(res, error);
+  }
+});
+
+app.delete('/api/shop-entries/:id', requireAuth, requireAdmin, async (req: any, res) => {
+  const tenantId = getTenantId(req);
+  try {
+    if (pool) {
+      const deleted = await runQuery('DELETE FROM shop_entries WHERE tenant_id = ? AND id = ? RETURNING id', [tenantId, req.params.id]);
+      if (!deleted.length) return res.status(404).json({ error: 'الحركة غير موجودة في الشركة.' });
+    } else {
+      const entry = fallbackShopEntries.find(item => item.tenantId === tenantId && item.id === req.params.id);
+      if (!entry) return res.status(404).json({ error: 'الحركة غير موجودة في الشركة.' });
+      fallbackShopEntries = fallbackShopEntries.filter(item => !(item.tenantId === tenantId && item.id === req.params.id));
+    }
+    return res.json({ success: true });
+  } catch (error) { return sendServerError(res, error); }
+});
+
 // 3.5 General Ledger API
 app.get("/api/general-ledger", requireAuth, requireLedger, async (req: any, res: any) => {
   const tenantId = getTenantId(req);
@@ -1487,7 +1593,8 @@ app.get("/api/general-ledger", requireAuth, requireLedger, async (req: any, res:
         rows = await runQuery("SELECT * FROM general_ledger WHERE tenant_id IS NULL OR tenant_id = '' ORDER BY date DESC, created_at DESC");
       }
       const mapped = rows.map((r: any) => ({
-        id: r.id,
+        id: r.id, branch: r.branch || '', category: r.category || '', reference: r.reference || '',
+        cashAccount: r.cash_account || undefined, counterpartAccount: r.counterpart_account || '',
         date: r.date ? (r.date instanceof Date ? r.date.toISOString().slice(0, 10) : String(r.date).slice(0, 10)) : "",
         bayan: r.bayan,
         debit: Number(r.debit || 0),
@@ -1495,10 +1602,10 @@ app.get("/api/general-ledger", requireAuth, requireLedger, async (req: any, res:
         createdAt: r.created_at,
         tenantId: r.tenant_id
       }));
-      return res.json(mapped);
+      return res.json(mapped.filter((entry: any) => inBranch(req, entry.branch)));
     }
     const filtered = fallbackGeneralLedger.filter((item) => (tenantId ? item.tenantId === tenantId : !item.tenantId));
-    return res.json(filtered);
+    return res.json(filtered.filter((entry: any) => inBranch(req, entry.branch)));
   } catch (err: any) {
     sendServerError(res, err);
   }
@@ -1515,12 +1622,16 @@ app.post("/api/general-ledger", requireAuth, requireLedger, requireAdmin, async 
   const item = parseResult.data;
   const tenantId = getTenantId(req);
   try {
+    if (item.branch) {
+      const owned = pool ? (await runQuery("SELECT name FROM branches WHERE tenant_id = ? AND name = ?", [tenantId, item.branch])).length > 0 : (fallbackBranches.get(tenantId) || []).includes(item.branch);
+      if (!owned) return res.status(400).json({ error: "الفرع غير موجود في الشركة." });
+    }
     if (pool) {
       await runQuery(
-        `INSERT INTO general_ledger (id, date, bayan, debit, credit, tenant_id, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO general_ledger (id, date, bayan, debit, credit, tenant_id, created_at, branch, category, reference, cash_account, counterpart_account)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (tenant_id, id) DO UPDATE SET
-           date=EXCLUDED.date, bayan=EXCLUDED.bayan, debit=EXCLUDED.debit, credit=EXCLUDED.credit`,
+           date=EXCLUDED.date, bayan=EXCLUDED.bayan, debit=EXCLUDED.debit, credit=EXCLUDED.credit, branch=EXCLUDED.branch, category=EXCLUDED.category, reference=EXCLUDED.reference, cash_account=EXCLUDED.cash_account, counterpart_account=EXCLUDED.counterpart_account`,
         [
           item.id,
           item.date,
@@ -1528,7 +1639,7 @@ app.post("/api/general-ledger", requireAuth, requireLedger, requireAdmin, async 
           item.debit || 0,
           item.credit || 0,
           tenantId,
-          item.createdAt || new Date().toISOString()
+          item.createdAt || new Date().toISOString(), item.branch || null, item.category || null, item.reference || null, item.cashAccount || "cash", item.counterpartAccount || null
         ]
       );
       return res.json({ success: true, entry: item });
@@ -1700,6 +1811,18 @@ app.get("/api/branches", requireAuth, async (req: any, res: any) => {
   }
 });
 
+async function branchesWithRecords(tenantId: string): Promise<Set<string>> {
+  if (pool) {
+    const rows = await runQuery(`SELECT branch FROM employees WHERE tenant_id = ?
+      UNION SELECT branch FROM payments WHERE tenant_id = ?
+      UNION SELECT branch FROM shop_entries WHERE tenant_id = ?
+      UNION SELECT branch FROM general_ledger WHERE tenant_id = ?`, [tenantId, tenantId, tenantId, tenantId]);
+    return new Set(rows.map((row: any) => row.branch).filter(Boolean));
+  }
+  return new Set([...fallbackEmployees, ...fallbackPayments, ...fallbackShopEntries, ...fallbackGeneralLedger]
+    .filter(item => (item.tenantId || '') === tenantId).map(item => item.branch).filter(Boolean));
+}
+
 app.post("/api/branches", requireAuth, requireAdmin, async (req: any, res: any) => {
   if (req.user.role === 'viewer') {
     return res.status(403).json({ error: "لا تملك صلاحية تعديل الفروع." });
@@ -1713,6 +1836,8 @@ app.post("/api/branches", requireAuth, requireAdmin, async (req: any, res: any) 
   try {
     if (Array.isArray(bodyData)) {
       const names = bodyData.map(item => typeof item === 'string' ? item : item?.name).filter(Boolean);
+      const protectedBranches = await branchesWithRecords(tenantId);
+      if ([...protectedBranches].some(name => !names.includes(name))) return res.status(409).json({ error: 'لا يمكن حذف فرع له عمالة أو حركات مالية. احتفظ به لحماية كشف الحساب.' });
       if (pool) {
         if (names.length > 0) {
           const placeholders = names.map(() => '?').join(', ');
@@ -1755,6 +1880,7 @@ app.delete("/api/branches/:name", requireAuth, requireAdmin, async (req: any, re
   const { name } = req.params;
   const tenantId = getTenantId(req);
   try {
+    if ((await branchesWithRecords(tenantId)).has(name)) return res.status(409).json({ error: "لا يمكن حذف فرع له عمالة أو حركات مالية." });
     if (pool) {
       await runQuery("DELETE FROM branches WHERE name = ? AND tenant_id = ?", [name, tenantId]);
       return res.json({ success: true });
@@ -1851,7 +1977,7 @@ app.post("/api/system/wipe", requireAuth, async (req: any, res: any) => {
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
-        for (const table of ["payments", "employees", "activity_logs", "general_ledger", "branches"]) {
+        for (const table of ["payments", "employees", "activity_logs", "general_ledger", "shop_entries", "branches"]) {
           await client.query(`DELETE FROM ${table} WHERE COALESCE(tenant_id, '') = $1`, [tenantId]);
         }
         await client.query("COMMIT");
@@ -1864,12 +1990,14 @@ app.post("/api/system/wipe", requireAuth, async (req: any, res: any) => {
         fallbackPayments = fallbackPayments.filter((p) => p.tenantId !== tenantId);
         fallbackLogs = fallbackLogs.filter((l) => l.tenantId !== tenantId);
         fallbackGeneralLedger = fallbackGeneralLedger.filter((g) => g.tenantId !== tenantId);
+        fallbackShopEntries = fallbackShopEntries.filter(e => e.tenantId !== tenantId);
         fallbackBranches.delete(tenantId);
       } else {
         fallbackEmployees = fallbackEmployees.filter(e => !!e.tenantId);
         fallbackPayments = fallbackPayments.filter(p => !!p.tenantId);
         fallbackLogs = fallbackLogs.filter(l => !!l.tenantId);
         fallbackGeneralLedger = fallbackGeneralLedger.filter(g => !!g.tenantId);
+        fallbackShopEntries = fallbackShopEntries.filter(e => !!e.tenantId);
         fallbackBranches.delete("");
       }
       return res.json({ success: true });

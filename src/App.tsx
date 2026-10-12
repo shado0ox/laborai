@@ -1,3 +1,4 @@
+import { employeeDues } from './utils/accounting';
 import { isEmployeeCredit } from './utils/paymentKind';
 import React, { useState, useEffect } from 'react';
 import { 
@@ -11,6 +12,7 @@ import AlertsListView from './components/AlertsListView';
 import PaymentsListView from './components/PaymentsListView';
 import MonthlyFinanceView from './components/MonthlyFinanceView';
 import GeneralLedgerView from './components/GeneralLedgerView';
+import ShopAccountsView from './components/ShopAccountsView';
 import LedgerStatement from './components/LedgerStatement';
 import PortalAuthView from './components/PortalAuthView';
 import PortalApprovalsView from './components/PortalApprovalsView';
@@ -705,7 +707,8 @@ export default function App() {
     notes?: string,
     m?: string,
     y?: string,
-    transactionKind?: Payment['transactionKind']
+    transactionKind?: Payment['transactionKind'],
+    details?: Partial<Pick<Payment, 'category' | 'balanceIncluded' | 'kafalaPeriod' | 'cashAccount'>>
   ): Promise<boolean> => {
     const emp = employees.find(e => e.iqamaNo === iqamaNo);
     const newPayment: Payment = {
@@ -719,7 +722,8 @@ export default function App() {
       notes,
       hijriMonth: m,
       hijriYear: y,
-      transactionKind
+      transactionKind,
+      ...details
     };
 
     try {
@@ -1038,7 +1042,7 @@ export default function App() {
     const debtCount = active.filter(e => {
       const pmts = payments.filter(p => (p.iqamaNo === e.iqamaNo) && isEmployeeCredit(p));
       const paid = pmts.reduce((s, p) => s + (p.amount || 0), 0);
-      const due = (e.iqamaBalance || 0) + (e.kafalaCount * pricingSettings.kafala) + (e.otherDebt || 0);
+      const due = employeeDues(e, pricingSettings, payments);
       return (paid - due) < 0;
     }).length;
 
@@ -1166,7 +1170,8 @@ export default function App() {
               {activeTab === 'approvals' && 'إدارة طلبات التسجيل والموافقات بالبوابة'}
               {activeTab === 'alerts' && 'الإنذارات العاجلة والإقامات المنتهية'}
               {activeTab === 'payments' && 'المدفوعات والتحصيلات'}
-              {activeTab === 'general_ledger' && 'الدفتر العام'}
+              {activeTab === 'general_ledger' && 'دفتر الصندوق والبنك'}
+              {activeTab === 'shop_accounts' && 'حسابات المحلات والفروع'}
               {activeTab === 'dev_panel' && 'إدارة النظام'}
               {activeTab === 'spaces' && 'الشركات والاشتراكات'}
               {activeTab === 'monthly' && 'التقارير والمقاصات المالية الشهرية'}
@@ -1298,7 +1303,7 @@ export default function App() {
               </button>
               
               <LedgerStatement 
-                employee={selectedStatementEmp}
+                employee={employees.find(employee => employee.iqamaNo === selectedStatementEmp.iqamaNo) || selectedStatementEmp}
                 payments={payments}
                 pricing={pricingSettings}
                 companyName={companySettings.name}
@@ -1408,9 +1413,12 @@ export default function App() {
                 <MonthlyFinanceView payments={payments} />
               )}
 
+              {activeTab === 'shop_accounts' && (currentUser.role !== 'viewer' || companySettings.allowLedgerForUsers) && <ShopAccountsView branches={branches} currentUser={currentUser} companyName={companySettings.name} logoBase64={companySettings.logoBase64} onManageBranches={() => setActiveTab('settings')} />}
+
               {/* Tab: General Ledger Statement (Receipts and Expenses Ledger) */}
               {activeTab === 'general_ledger' && (currentUser.role === 'admin' || companySettings.allowLedgerForUsers) && (
                 <GeneralLedgerView 
+                  branches={branches}
                   payments={payments}
                   currentUser={currentUser}
                   companyName={companySettings.name}

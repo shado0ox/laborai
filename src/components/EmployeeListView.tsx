@@ -1,3 +1,6 @@
+import HijriPeriodFields from './HijriPeriodFields';
+import { HijriPeriod, hijriMonthNumber, hijriPeriodMonths, payableHijriMonths, validHijriPeriod, formatHijriPeriod } from '../utils/accounting';
+import { employeeDues } from '../utils/accounting';
 import EmployeeActions from './EmployeeActions';
 import EmployeeDiscountDialog from './EmployeeDiscountDialog';
 import { getPaymentKind } from '../utils/paymentKind';
@@ -16,17 +19,6 @@ const AR_HIJRI_MONTHS = [
   'رجب', 'شعبان', 'رمضان', 'شوال', 'ذو القعدة', 'ذو الحجة'
 ];
 
-const getHijriMonthDistance = (fromM: string, toM: string) => {
-  const idxFrom = AR_HIJRI_MONTHS.indexOf(fromM);
-  const idxTo = AR_HIJRI_MONTHS.indexOf(toM);
-  if (idxFrom === -1 || idxTo === -1) return 1;
-  if (idxTo >= idxFrom) {
-    return idxTo - idxFrom + 1;
-  } else {
-    return (12 - idxFrom) + (idxTo + 1);
-  }
-};
-
 interface EmployeeListViewProps {
   employees: Employee[];
   payments: Payment[];
@@ -38,7 +30,7 @@ interface EmployeeListViewProps {
   onArchiveEmployee: (iqamaNo: string, reason: string) => void;
   onUpdateEmployeeExpiry: (iqamaNo: string, expiry: string) => void;
   onUpdateEmployee: (emp: Employee) => void;
-  onRegisterPayment: (iqamaNo: string, amount: number, type: string, notes?: string, m?: string, y?: string, transactionKind?: Payment['transactionKind']) => Promise<boolean>;
+  onRegisterPayment: (iqamaNo: string, amount: number, type: string, notes?: string, m?: string, y?: string, transactionKind?: Payment['transactionKind'], details?: Partial<Pick<Payment, 'category' | 'balanceIncluded' | 'kafalaPeriod' | 'cashAccount'>>) => Promise<boolean>;
   onAddKafalaOrder: (iqamaNo: string, months: number, notes?: string, m?: string, y?: string) => void;
   onShowStatement: (emp: Employee) => void;
 }
@@ -98,6 +90,9 @@ export default function EmployeeListView({
   const [payTab, setPayTab] = useState<'kafala' | 'iqama' | 'other'>('kafala');
   const [payHijriMonth, setPayHijriMonth] = useState('1');
   const [payHijriYear, setPayHijriYear] = useState('1447');
+  const [payEndMonth, setPayEndMonth] = useState(1);
+  const [payEndYear, setPayEndYear] = useState(1447);
+  const [payCashAccount, setPayCashAccount] = useState<'cash' | 'bank'>('cash');
   const [payAmountKafala, setPayAmountKafala] = useState(pricing.kafala);
   const [payIqamaDuration, setPayIqamaDuration] = useState<3 | 6 | 12>(12);
   const [payIqamaFromMonth, setPayIqamaFromMonth] = useState('1');
@@ -207,20 +202,47 @@ export default function EmployeeListView({
   const [debtKafalaFromM, setDebtKafalaFromM] = useState('محرم');
   const [debtKafalaToM, setDebtKafalaToM] = useState('ذو الحجة');
   const [debtKafalaFromY, setDebtKafalaFromY] = useState('1447');
+  const [debtKafalaToY, setDebtKafalaToY] = useState('1447');
+  const [debtFreeFromY, setDebtFreeFromY] = useState('1447');
+  const [debtFreeToY, setDebtFreeToY] = useState('1447');
+  const [savingDebt, setSavingDebt] = useState(false);
   const [hasFreeMonths, setHasFreeMonths] = useState(false);
   const [debtFreeFromM, setDebtFreeFromM] = useState('رجب');
   const [debtFreeToM, setDebtFreeToM] = useState('رمضان');
   const [debtKafalaNotes, setDebtKafalaNotes] = useState('');
 
-  useEffect(() => {
-    if (debtTab === 'kafala') {
-      const totalM = getHijriMonthDistance(debtKafalaFromM, debtKafalaToM);
-      const freeM = hasFreeMonths ? getHijriMonthDistance(debtFreeFromM, debtFreeToM) : 0;
-      const paidM = Math.max(0, totalM - freeM);
-      setDebtKafalaMonths(paidM);
-      setDebtKafalaAmount(paidM * pricing.kafala);
+  const debtPeriod: HijriPeriod = {
+    fromMonth: hijriMonthNumber(debtKafalaFromM), fromYear: Number(debtKafalaFromY),
+    toMonth: hijriMonthNumber(debtKafalaToM), toYear: Number(debtKafalaToY),
+    ...(hasFreeMonths ? { freeFromMonth: hijriMonthNumber(debtFreeFromM), freeFromYear: Number(debtFreeFromY), freeToMonth: hijriMonthNumber(debtFreeToM), freeToYear: Number(debtFreeToY) } : {})
+  };
+  const paymentPeriod: HijriPeriod = { fromMonth: Number(payHijriMonth), fromYear: Number(payHijriYear), toMonth: payEndMonth, toYear: payEndYear };
+  const changeDebtPeriod = (period: HijriPeriod) => {
+    setDebtKafalaFromM(AR_HIJRI_MONTHS[period.fromMonth - 1]); setDebtKafalaFromY(String(period.fromYear));
+    setDebtKafalaToM(AR_HIJRI_MONTHS[period.toMonth - 1]); setDebtKafalaToY(String(period.toYear));
+    setHasFreeMonths(period.freeFromMonth !== undefined);
+    if (period.freeFromMonth !== undefined) {
+      setDebtFreeFromM(AR_HIJRI_MONTHS[period.freeFromMonth - 1]); setDebtFreeFromY(String(period.freeFromYear));
+      setDebtFreeToM(AR_HIJRI_MONTHS[period.freeToMonth! - 1]); setDebtFreeToY(String(period.freeToYear));
     }
-  }, [debtKafalaFromM, debtKafalaToM, hasFreeMonths, debtFreeFromM, debtFreeToM, pricing.kafala, debtTab]);
+  };
+  const changePaymentPeriod = (period: HijriPeriod) => {
+    setPayHijriMonth(String(period.fromMonth)); setPayHijriYear(String(period.fromYear));
+    setPayEndMonth(period.toMonth); setPayEndYear(period.toYear);
+    let months = payableHijriMonths(period);
+    if (pricing.ramadanFree && validHijriPeriod(period)) {
+      for (let index = period.fromYear * 12 + period.fromMonth - 1; index <= period.toYear * 12 + period.toMonth - 1; index++) {
+        if (index % 12 === 8) months--;
+      }
+    }
+    setPayAmountKafala(Math.max(0, months) * pricing.kafala);
+  };
+  useEffect(() => {
+    if (isDebtOpen && debtTab === 'kafala') {
+      const months = payableHijriMonths(debtPeriod);
+      setDebtKafalaMonths(months); setDebtKafalaAmount(months * pricing.kafala);
+    }
+  }, [isDebtOpen, debtTab, debtKafalaFromM, debtKafalaFromY, debtKafalaToM, debtKafalaToY, hasFreeMonths, debtFreeFromM, debtFreeFromY, debtFreeToM, debtFreeToY, pricing.kafala]);
   
   const [debtIqamaDur, setDebtIqamaDur] = useState<3 | 6 | 12>(12);
   const [debtIqamaCost, setDebtIqamaCost] = useState(pricing.iqama12);
@@ -282,7 +304,7 @@ export default function EmployeeListView({
     const empPaid = payments
       .filter(p => (p.iqamaNo === e.iqamaNo) && isEmployeeCredit(p))
       .reduce((sum, p) => sum + (p.amount || 0), 0);
-    const empDue = (e.iqamaBalance || 0) + (e.kafalaCount * pricing.kafala) + (e.otherDebt || 0);
+    const empDue = employeeDues(e, pricing, payments);
     const balance = empPaid - empDue;
 
     let matchesDebt = true;
@@ -298,6 +320,7 @@ export default function EmployeeListView({
   const handleOpenPay = (emp: Employee) => {
     setSelectedEmp(emp);
     setPayTab('kafala');
+    setPayHijriMonth('1'); setPayHijriYear('1447'); setPayEndMonth(1); setPayEndYear(1447);
     setPayAmountKafala(pricing.kafala);
     setPayAmountIqama(pricing.iqama12);
     setPayIqamaDuration(12);
@@ -406,10 +429,11 @@ export default function EmployeeListView({
     ];
 
     if (payTab === 'kafala') {
+      if (!validHijriPeriod(paymentPeriod)) { alert('حدد فترة كفالة صحيحة تشمل سنة البداية والنهاية.'); return; }
       paidAmt = Number(payAmountKafala) || 0;
       hMonth = payHijriMonth;
       hYear = payHijriYear;
-      payType = `من المقبوضات: سداد رسوم كفالة — لشهر ${AR_MONTH_NAMES[parseInt(payHijriMonth, 10)] || payHijriMonth} ${payHijriYear}`;
+      payType = `من المقبوضات: سداد رسوم كفالة — ${formatHijriPeriod(paymentPeriod)}`;
     } else if (payTab === 'iqama') {
       paidAmt = Number(payAmountIqama) || 0;
       payType = `من المقبوضات: سداد رسوم إقامة — تجديد ${payIqamaDuration} أشهر | من ${payIqamaFromMonth}/${payIqamaFromYear}`;
@@ -424,7 +448,7 @@ export default function EmployeeListView({
     if (!Number.isFinite(paidAmt) || paidAmt <= 0) { alert('أدخل مبلغاً أكبر من الصفر.'); return; }
     setSavingPayment(true);
     try {
-      if (await onRegisterPayment(selectedEmp.iqamaNo, paidAmt, payType, payOtherNotes, hMonth, hYear, getPaymentKind({ type: payType }))) setIsPayOpen(false);
+      if (await onRegisterPayment(selectedEmp.iqamaNo, paidAmt, payType, payOtherNotes, hMonth, hYear, getPaymentKind({ type: payType }), { category: payTab as Payment['category'], cashAccount: payCashAccount, ...(payTab === 'kafala' ? { kafalaPeriod: paymentPeriod } : {}) })) setIsPayOpen(false);
     } finally { setSavingPayment(false); }
   };
 
@@ -436,6 +460,7 @@ export default function EmployeeListView({
     setDebtKafalaFromM('محرم');
     setDebtKafalaToM('ذو الحجة');
     setDebtKafalaFromY('1447');
+    setDebtKafalaToY('1447');
     setHasFreeMonths(false);
     setDebtFreeFromM('رجب');
     setDebtFreeToM('رمضان');
@@ -455,76 +480,28 @@ export default function EmployeeListView({
     setIsDebtOpen(true);
   };
 
-  const submitDebtOrder = () => {
+  const submitDebtOrder = async () => {
     if (!selectedEmp) return;
-
+    let amount = 0, description = '', notes = '';
     if (debtTab === 'kafala') {
-      const months = Number(debtKafalaMonths) || 0;
-      const customAmt = Number(debtKafalaAmount) || 0;
-      
-      const updated = {
-        ...selectedEmp,
-        kafalaCount: (selectedEmp.kafalaCount || 0) + months
-      };
-      
-      const defaultCost = months * pricing.kafala;
-      const diff = customAmt - defaultCost;
-      if (diff !== 0) {
-        updated.otherDebt = (updated.otherDebt || 0) + diff;
-        updated.otherDebtDesc = updated.otherDebtDesc 
-          ? `${updated.otherDebtDesc} + فرق كفالة` 
-          : `فرق تكلفة كفالة هجرية`;
-      }
-      
-      let detailDesc = `إثبات كفالة بقيمة ${customAmt} ر.س — للفترة من ${debtKafalaFromM} إلى ${debtKafalaToM}`;
-      if (hasFreeMonths) {
-        detailDesc += ` (ويوجد شهور مجانية من ${debtFreeFromM} إلى ${debtFreeToM})`;
-      }
-      detailDesc += ` هـ مضافة للمديونية`;
-      
-      onUpdateEmployee(updated);
-      onRegisterPayment(selectedEmp.iqamaNo, customAmt, `قيد مديونية: ${detailDesc}`, debtKafalaNotes, debtKafalaFromM, debtKafalaFromY);
+      if (!validHijriPeriod(debtPeriod)) { alert('تحقق من سنوات الفترة وترتيب الشهور وفترة الإعفاء.'); return; }
+      amount = Number(debtKafalaAmount);
+      description = `قيد مديونية: كفالة للفترة ${formatHijriPeriod(debtPeriod)} (${payableHijriMonths(debtPeriod)} شهر مستحق)`;
+      if (hasFreeMonths) description += `؛ إعفاء ${AR_HIJRI_MONTHS[debtPeriod.freeFromMonth! - 1]} ${debtPeriod.freeFromYear} إلى ${AR_HIJRI_MONTHS[debtPeriod.freeToMonth! - 1]} ${debtPeriod.freeToYear}`;
+      notes = debtKafalaNotes;
+    } else if (debtTab === 'iqama') {
+      amount = Number(debtIqamaCost); description = `قيد مديونية: رسوم إقامة وتجديد ${debtIqamaDur} أشهر`; notes = debtIqamaNotes;
+    } else if (debtTab === 'insurance') {
+      amount = Number(debtInsuranceAmt); description = 'قيد مديونية: رسوم تأمين طبي'; notes = debtInsuranceNotes;
+    } else {
+      amount = Number(debtOtherAmt); description = `قيد مديونية: ${debtOtherTitle || 'استحقاق آخر'}`; notes = debtOtherNotes;
     } 
-    
-    else if (debtTab === 'iqama') {
-      const cost = Number(debtIqamaCost) || 0;
-      const updated = {
-        ...selectedEmp,
-        iqamaBalance: (selectedEmp.iqamaBalance || 0) + cost
-      };
-      
-      onUpdateEmployee(updated);
-      onRegisterPayment(selectedEmp.iqamaNo, cost, `قيد مديونية: إثبات رسوم إقامة بقيمة ${cost} ر.س — تجديد ${debtIqamaDur} أشهر`, debtIqamaNotes);
-    } 
-    
-    else if (debtTab === 'insurance') {
-      const amt = Number(debtInsuranceAmt) || 0;
-      const updated = {
-        ...selectedEmp,
-        otherDebt: (selectedEmp.otherDebt || 0) + amt,
-        otherDebtDesc: selectedEmp.otherDebtDesc 
-          ? `${selectedEmp.otherDebtDesc} + تأمين طبي` 
-          : `رسوم تأمين طبي`
-      };
-      
-      onUpdateEmployee(updated);
-      onRegisterPayment(selectedEmp.iqamaNo, amt, `قيد مديونية: إثبات رسوم تأمين طبي بقيمة ${amt} ر.س`, debtInsuranceNotes);
-    } 
-    
-    else {
-      const amt = Number(debtOtherAmt) || 0;
-      const updated = {
-        ...selectedEmp,
-        otherDebt: (selectedEmp.otherDebt || 0) + amt,
-        otherDebtDesc: debtOtherTitle.trim() || 'مديونية أخرى معلقة'
-      };
-      
-      onUpdateEmployee(updated);
-      onRegisterPayment(selectedEmp.iqamaNo, amt, `قيد مديونية: إثبات مديونية أخرى (${debtOtherTitle || 'مديونية معلقة'}) بقيمة ${amt} ر.س`, debtOtherNotes);
-    }
-
-    setIsDebtOpen(false);
-    alert(`✓ تم تسجيل وتوثيق الاستحقاق المالي بنجاح في مديونية الموظف ${selectedEmp.name}`);
+    if (!Number.isFinite(amount) || amount <= 0) { alert('أدخل مبلغ مديونية أكبر من الصفر. الفترة المعفاة بالكامل لا تحتاج إلى قيد مديونية.'); return; }
+    setSavingDebt(true);
+    try {
+      const saved = await onRegisterPayment(selectedEmp.iqamaNo, amount, description, notes, debtTab === 'kafala' ? debtKafalaFromM : undefined, debtTab === 'kafala' ? debtKafalaFromY : undefined, 'debt', { category: debtTab, balanceIncluded: false, ...(debtTab === 'kafala' ? { kafalaPeriod: debtPeriod } : {}) });
+      if (saved) setIsDebtOpen(false);
+    } finally { setSavingDebt(false); }
   };
 
   const submitUpdateExpiry = () => {
@@ -554,7 +531,7 @@ export default function EmployeeListView({
     finalEmployeesList.forEach(e => {
       const pmts = payments.filter(p => (p.iqamaNo === e.iqamaNo) && isEmployeeCredit(p));
       const paid = pmts.reduce((s, p) => s + (p.amount || 0), 0);
-      const due = (e.iqamaBalance || 0) + (e.kafalaCount * pricing.kafala) + (e.otherDebt || 0);
+      const due = employeeDues(e, pricing, payments);
       const bal = paid - due;
       const hExp = g2h(e.iqamaExpiry);
 
@@ -819,7 +796,7 @@ export default function EmployeeListView({
               {finalEmployeesList.map((e, index) => {
                 const empPays = payments.filter(p => (p.iqamaNo === e.iqamaNo) && isEmployeeCredit(p));
                 const totalPaid = empPays.reduce((sum, p) => sum + (p.amount || 0), 0);
-                const totalDue = (e.iqamaBalance || 0) + (e.kafalaCount * pricing.kafala) + (e.otherDebt || 0);
+                const totalDue = employeeDues(e, pricing, payments);
                 const balance = totalPaid - totalDue;
 
                 // Expiry colors
@@ -1057,7 +1034,7 @@ export default function EmployeeListView({
       {/* 💳 MODAL 2: RECORD PAYMENT */}
       {isPayOpen && selectedEmp && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl max-w-sm w-full shadow-2xl border border-slate-100 overflow-hidden text-right">
+          <div className="bg-white rounded-xl max-w-md w-full max-h-[90dvh] overflow-y-auto shadow-2xl border border-slate-100 overflow-hidden text-right">
             <div className="bg-gradient-to-r from-emerald-600 to-emerald-500 p-4 text-white flex justify-between items-center">
               <h4 className="font-extrabold text-sm flex items-center gap-1.5">
                 <Coins className="w-5 h-5 animate-bounce" />
@@ -1088,39 +1065,13 @@ export default function EmployeeListView({
 
               {payTab === 'kafala' && (
                 <div className="space-y-3">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1">
-                      <label>الشهر الهجري</label>
-                      <select 
-                        value={payHijriMonth} 
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setPayHijriMonth(val);
-                          // Ramadan month is 9
-                          setPayAmountKafala(val === '9' && pricing.ramadanFree ? 0 : pricing.kafala);
-                        }}
-                        className="w-full py-2 px-3 border border-slate-200 rounded-lg text-xs"
-                      >
-                        {['محرم','صفر','ربيع الأول','ربيع الآخر','جمادى الأولى','جمادى الآخرة','رجب','شعبان','رمضان','شوال','ذو القعدة','ذو الحجة'].map((m, i) => (
-                          <option key={m} value={String(i + 1)}>{m}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="space-y-1">
-                      <label>السنة الهجرية</label>
-                      <select value={payHijriYear} onChange={(e) => setPayHijriYear(e.target.value)} className="w-full py-2 px-3 border border-slate-200 rounded-lg text-xs">
-                        {['1445', '1446', '1447', '1448', '1449'].map(y => (
-                          <option key={y} value={y}>{y}</option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
+                  <HijriPeriodFields value={paymentPeriod} onChange={changePaymentPeriod} />
 
                   <div className="space-y-1">
-                    <label>المبلغ المدفوع (ريال) *</label>
-                    <input type="number" value={payAmountKafala} onChange={(e) => setPayAmountKafala(Number(e.target.value))} className="w-full text-xs font-mono font-bold leading-relaxed py-2 px-3 border border-slate-200 rounded-lg bg-emerald-50 text-emerald-800" />
-                    {payHijriMonth === '9' && pricing.ramadanFree && (
-                      <span className="text-[10px] text-emerald-600 block mt-1 font-bold">🎁 شهر رمضان المبارك معفي وسعره صفر! (يمكن تغييره يدوياً إذا رغبت).</span>
+                    <label htmlFor="kafala-paid-amount">المبلغ المدفوع (ريال) *</label>
+                    <input type="number" id="kafala-paid-amount" value={payAmountKafala} onChange={(e) => setPayAmountKafala(Number(e.target.value))} className="w-full text-xs font-mono font-bold leading-relaxed py-2 px-3 border border-slate-200 rounded-lg bg-emerald-50 text-emerald-800" />
+                    {pricing.ramadanFree && (
+                      <span className="text-[10px] text-emerald-600 block mt-1 font-bold">المبلغ المقترح يستثني رمضان وفق إعدادات التسعير. يمكن تعديل المبلغ الفعلي يدويًا.</span>
                     )}
                   </div>
                 </div>
@@ -1206,6 +1157,7 @@ export default function EmployeeListView({
               )}
 
               {payTab === 'other' && payOtherType === 'تسوية رصيد' && <p className="text-amber-900 bg-amber-50 p-3 rounded-lg">تسوية غير نقدية: تؤثر في رصيد العامل ولا تظهر ضمن الوارد والصادر.</p>}
+              <label className="block text-sm">حساب التحصيل<select aria-label="حساب التحصيل" value={payCashAccount} onChange={event => setPayCashAccount(event.target.value as 'cash' | 'bank')} className="field"><option value="cash">الصندوق</option><option value="bank">البنك</option></select></label>
               <div className="space-y-1">
                 <label>ملاحظات العملية</label>
                 <textarea value={payOtherNotes} onChange={(e) => setPayOtherNotes(e.target.value)} placeholder="مثال: رقم العملية 09482 بمطابقة حساب بنك الراجحي" className="w-full py-1.5 px-3 border border-slate-200 rounded-lg text-xs" style={{ minHeight: '50px' }}></textarea>
@@ -1255,127 +1207,32 @@ export default function EmployeeListView({
 
               {debtTab === 'kafala' && (
                 <div className="space-y-4">
-                  {/* Kafala Period Range Selection */}
-                  <div className="bg-slate-50 p-3 rounded-xl border border-slate-150 space-y-3">
-                    <span className="font-extrabold text-xs text-slate-600 block">فترة الكفالة الكلية</span>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="space-y-1">
-                        <label className="text-[11px] text-slate-500">من شهر هجري</label>
-                        <select 
-                          value={debtKafalaFromM} 
-                          onChange={(e) => setDebtKafalaFromM(e.target.value)} 
-                          className="w-full py-1.5 px-2 border border-slate-200 rounded-lg text-xs bg-white font-bold cursor-pointer"
-                        >
-                          {AR_HIJRI_MONTHS.map(m => (
-                            <option key={m} value={m}>{m}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-[11px] text-slate-500">إلى شهر هجري</label>
-                        <select 
-                          value={debtKafalaToM} 
-                          onChange={(e) => setDebtKafalaToM(e.target.value)} 
-                          className="w-full py-1.5 px-2 border border-slate-200 rounded-lg text-xs bg-white font-bold cursor-pointer"
-                        >
-                          {AR_HIJRI_MONTHS.map(m => (
-                            <option key={m} value={m}>{m}</option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2 items-end">
-                      <div className="space-y-1">
-                        <label className="text-[11px] text-slate-500">السنة الهجرية</label>
-                        <select 
-                          value={debtKafalaFromY} 
-                          onChange={(e) => setDebtKafalaFromY(e.target.value)} 
-                          className="w-full py-1.5 px-2 border border-slate-200 rounded-lg text-xs bg-white font-bold cursor-pointer"
-                        >
-                          {['1445', '1446', '1447', '1448', '1449'].map(y => (
-                            <option key={y} value={y}>{y}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="bg-slate-200/60 p-2 rounded-lg text-center font-bold text-[11px] text-slate-700 h-[34px] flex items-center justify-center">
-                        عدد الشهور الكلية: {getHijriMonthDistance(debtKafalaFromM, debtKafalaToM)} أشهر
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Free Months Option */}
-                  <div className="border border-amber-200 bg-amber-50/20 p-3 rounded-xl space-y-3">
-                    <div className="flex items-center gap-2">
-                      <input 
-                        type="checkbox" 
-                        id="hasFreeMonthsCheckbox" 
-                        checked={hasFreeMonths} 
-                        onChange={(e) => setHasFreeMonths(e.target.checked)} 
-                        className="w-4 h-4 text-rose-600 border-slate-300 rounded focus:ring-rose-500 cursor-pointer"
-                      />
-                      <label htmlFor="hasFreeMonthsCheckbox" className="font-extrabold text-xs text-slate-700 cursor-pointer select-none">
-                        تخصم شهور مجانية (لا تحسب عليها كفالة)؟
-                      </label>
-                    </div>
-
-                    {hasFreeMonths && (
-                      <div className="grid grid-cols-2 gap-2 pt-1 border-t border-amber-100/50">
-                        <div className="space-y-1">
-                          <label className="text-[10px] text-slate-500">مجانى من شهر</label>
-                          <select 
-                            value={debtFreeFromM} 
-                            onChange={(e) => setDebtFreeFromM(e.target.value)} 
-                            className="w-full py-1.5 px-2 border border-amber-150 rounded-lg text-xs bg-white font-bold text-amber-900 cursor-pointer"
-                          >
-                            {AR_HIJRI_MONTHS.map(m => (
-                              <option key={m} value={m}>{m}</option>
-                            ))}
-                          </select>
-                        </div>
-                        <div className="space-y-1">
-                          <label className="text-[10px] text-slate-500">مجانى إلى شهر</label>
-                          <select 
-                            value={debtFreeToM} 
-                            onChange={(e) => setDebtFreeToM(e.target.value)} 
-                            className="w-full py-1.5 px-2 border border-amber-150 rounded-lg text-xs bg-white font-bold text-amber-900 cursor-pointer"
-                          >
-                            {AR_HIJRI_MONTHS.map(m => (
-                              <option key={m} value={m}>{m}</option>
-                            ))}
-                          </select>
-                        </div>
-                        <span className="col-span-2 text-[10px] text-amber-700 font-bold block bg-amber-100/30 p-1.5 rounded-md text-center mt-1">
-                          عدد الشهور المجانية المخصومة: {getHijriMonthDistance(debtFreeFromM, debtFreeToM)} أشهر
-                        </span>
-                      </div>
-                    )}
-                  </div>
+                  <div className="bg-slate-50 p-3 rounded-lg"><HijriPeriodFields value={debtPeriod} onChange={changeDebtPeriod} allowFree /></div>
 
                   {/* Calculations breakdown info card */}
                   <div className="p-3 bg-red-50/50 border border-red-100/50 rounded-xl space-y-1 text-[11px] text-slate-700">
                     <div className="flex justify-between">
                       <span>إجمالي شهور العقد:</span>
-                      <span className="font-bold">{getHijriMonthDistance(debtKafalaFromM, debtKafalaToM)} أشهر</span>
+                      <span className="font-bold">{hijriPeriodMonths(debtPeriod.fromMonth, debtPeriod.fromYear, debtPeriod.toMonth, debtPeriod.toYear)} أشهر</span>
                     </div>
                     {hasFreeMonths && (
                       <div className="flex justify-between text-amber-700">
                         <span>شهور معفاة مجانية:</span>
-                        <span className="font-bold">-{getHijriMonthDistance(debtFreeFromM, debtFreeToM)} أشهر</span>
+                        <span className="font-bold">-{hijriPeriodMonths(debtPeriod.freeFromMonth!, debtPeriod.freeFromYear!, debtPeriod.freeToMonth!, debtPeriod.freeToYear!)} أشهر</span>
                       </div>
                     )}
                     <div className="flex justify-between border-t border-slate-200/50 pt-1.5 font-extrabold text-slate-800 text-xs">
-                      <span>الصافي المدفوع:</span>
+                      <span>الصافي المستحق:</span>
                       <span>{debtKafalaMonths} أشهر × {pricing.kafala} ريال/شهر</span>
                     </div>
                   </div>
 
                   {/* Editable Amount */}
                   <div className="space-y-1">
-                    <label>المبلغ المستحق النهائي للتدوين (ريال) *</label>
+                    <label htmlFor="kafala-debt-amount">المبلغ المستحق النهائي للتدوين (ريال) *</label>
                     <input 
                       type="number" 
-                      value={debtKafalaAmount} 
+                      id="kafala-debt-amount" value={debtKafalaAmount}
                       onChange={(e) => setDebtKafalaAmount(Number(e.target.value))} 
                       className="w-full text-xs font-mono font-bold leading-relaxed py-2 px-3 border border-slate-200 rounded-lg bg-red-50 text-red-950" 
                     />
@@ -1486,7 +1343,7 @@ export default function EmployeeListView({
 
             <div className="p-4 bg-slate-50 border-t border-slate-150 flex justify-end gap-2.5">
               <button onClick={() => setIsDebtOpen(false)} className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg text-xs hover:bg-slate-300 font-bold">أغلق</button>
-              <button onClick={submitDebtOrder} className="px-5 py-2 bg-rose-600 text-white rounded-lg text-xs hover:bg-rose-700 font-bold shadow-md">✓ إثبات وتثبيت الدين</button>
+              <button disabled={savingDebt} onClick={submitDebtOrder} className="px-5 py-2 bg-rose-600 text-white rounded-lg text-xs hover:bg-rose-700 font-bold shadow-md">{savingDebt ? 'جارٍ إثبات المديونية…' : 'إثبات المديونية'}</button>
             </div>
           </div>
         </div>

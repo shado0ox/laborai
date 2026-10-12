@@ -19,6 +19,10 @@ export interface Employee {
 }
 
 export interface Payment {
+  category?: 'kafala' | 'iqama' | 'insurance' | 'other';
+  balanceIncluded?: boolean;
+  kafalaPeriod?: import('./utils/accounting').HijriPeriod;
+  cashAccount?: 'cash' | 'bank';
   transactionKind?: import('./utils/paymentKind').PaymentKind;
   id: string;
   iqamaNo: string;
@@ -96,6 +100,11 @@ export interface ActivityLog {
 }
 
 export interface GeneralLedgerEntry {
+  branch?: string;
+  category?: string;
+  reference?: string;
+  cashAccount?: 'cash' | 'bank';
+  counterpartAccount?: string;
   id: string;
   date: string; // YYYY-MM-DD
   bayan: string;
@@ -105,3 +114,11 @@ export interface GeneralLedgerEntry {
   tenantId?: string;
 }
 
+
+export interface ShopEntry {
+  id: string; branch: string; date: string; year: number;
+  kind: 'charge' | 'receipt' | 'opening' | 'discount';
+  amount: number; category: string; description: string; reference?: string;
+  responsible?: string; notes?: string; paidByCompany: boolean;
+  cashAccount: 'cash' | 'bank'; createdAt?: string;
+}

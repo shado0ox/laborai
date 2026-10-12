@@ -128,11 +128,50 @@ test('PostgreSQL-backed ownership, authentication and persistence', { timeout: 9
     await api('/api/admin/spaces', 'POST', { action: 'renew_subscription', tenantId: b.tenantId }, developer);
     await api('/api/employees', 'GET', undefined, adminB);
   });
+  await t.test('multi-year kafala metadata persists and invalid periods are rejected', async () => {
+    const period = { fromMonth: 1, fromYear: 1447, toMonth: 6, toYear: 1448 };
+    const entry = { id: 'multi-year-debt', iqamaNo: '2000000001', name: 'Worker', branch: 'East', amount: 4500, type: 'قيد مديونية: كفالة', transactionKind: 'debt', category: 'kafala', balanceIncluded: false, kafalaPeriod: period, date: '2026-10-01' };
+    await api('/api/payments', 'POST', entry, adminA);
+    const saved = (await api('/api/payments', 'GET', undefined, adminA)).find(payment => payment.id === entry.id);
+    assert.deepEqual(saved.kafalaPeriod, period); assert.equal(saved.balanceIncluded, false); assert.equal(saved.category, 'kafala');
+    assert.equal((await api('/api/employees', 'GET', undefined, adminA)).find(employee => employee.iqamaNo === entry.iqamaNo).kafalaCount, 2);
+    await api('/api/payments', 'POST', { ...entry, id: 'invalid-period', kafalaPeriod: { ...period, toYear: 1446 } }, adminA, 400);
+  });
+  await t.test('shop statements are tenant and branch isolated, retried writes are idempotent', async () => {
+    await api('/api/branches', 'POST', ['East'], adminB);
+    const entry = { id: 'annual-cost', branch: 'East', date: '2026-10-01', year: 2026, kind: 'charge', amount: 500, category: 'زكاة', description: 'Annual zakat', reference: 'ZAKAT-2026', paidByCompany: true, cashAccount: 'bank' };
+    await api('/api/shop-entries', 'POST', entry, adminA, 201);
+    await api('/api/shop-entries', 'POST', entry, adminA);
+    await api('/api/shop-entries', 'POST', { ...entry, id: 'duplicate-ref' }, adminA, 409);
+    await api('/api/shop-entries', 'POST', { ...entry, id: 'annual-cost', amount: 999 }, adminA, 409);
+    await api('/api/shop-entries', 'POST', { ...entry, amount: 700 }, adminB, 201);
+    const aEntries = await api('/api/shop-entries', 'GET', undefined, adminA);
+    const bEntries = await api('/api/shop-entries', 'GET', undefined, adminB);
+    assert.equal(aEntries.length,1); assert.equal(aEntries[0].amount,500); assert.equal(bEntries[0].amount,700);
+    await api('/api/shop-entries', 'POST', { ...entry, id: 'west', branch: 'West', reference: 'WEST-2026', paidByCompany: false }, adminA, 201);
+    const branchRead = await login('branch-test@example.test');
+    // branch account is still East at this point
+    assert.equal((await api('/api/shop-entries', 'GET', undefined, branchRead.token)).length,1);
+    await api('/api/shop-entries', 'POST', { ...entry, id: 'forbidden' }, branchRead.token, 403);
+    await api('/api/shop-entries/annual-cost', 'DELETE', undefined, viewer.token, 403);
+    await api('/api/shop-entries/not-owned', 'DELETE', undefined, adminB, 404);
+    await api('/api/shop-entries', 'POST', { ...entry, id: 'unowned-branch', branch: 'Outside' }, adminA, 400);
+  });
+  await t.test('manual cashbook account, branch, reference and counterpart persist', async () => {
+    await api('/api/branches/East', 'DELETE', undefined, adminA, 409);
+    await api('/api/branches', 'POST', ['West'], adminA, 409);
+    const entry = { id: 'bank-supplier', date: '2026-10-01', bayan: 'Supplier payment', debit: 50, credit: 0, branch: 'West', category: 'مورد', reference: 'PAY-2026-001', cashAccount: 'bank', counterpartAccount: 'ذمم الموردين' };
+    await api('/api/general-ledger', 'POST', entry, adminA);
+    const saved = (await api('/api/general-ledger', 'GET', undefined, adminA)).find(item => item.id === entry.id);
+    assert.equal(saved.cashAccount,'bank'); assert.equal(saved.counterpartAccount,'ذمم الموردين'); assert.equal(saved.reference,entry.reference);
+    assert.equal((await api('/api/general-ledger', 'GET', undefined, branch.token)).some(item => item.id === entry.id),false);
+    await api('/api/general-ledger', 'POST', { ...entry, id: 'invalid-branch', branch: 'Outside' }, adminA, 400);
+  });
   await t.test('payment deletion persists and does not delete same ID in another tenant', async () => {
     await api('/api/payments/shared-payment', 'DELETE', undefined, viewer.token, 403);
     await api('/api/payments/shared-payment', 'DELETE', undefined, branch.token);
     assert.equal((await api('/api/payments', 'GET', undefined, adminA)).filter(p => p.transactionKind === 'receipt').length, 0);
-    assert.equal((await api('/api/payments', 'GET', undefined, adminB)).length, 1);
+    assert.ok((await api('/api/payments', 'GET', undefined, adminB)).some(payment => payment.id === 'shared-payment'));
   });
   await t.test('role/status/deletion changes invalidate existing sessions', async () => {
     await api(`/api/users/${branch.uid}`, 'PUT', { role: 'viewer' }, adminA);

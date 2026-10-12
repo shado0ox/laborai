@@ -71,3 +71,23 @@ The workforce table keeps a statement button and one grouped actions menu. The m
 Validation now includes 16 automated tests and a browser scenario: opening dues 3,800, receipt 1,500, discount 100 → employee outstanding 2,200; cash receipts remain 1,500 and the discount is absent from the cash ledger.
 
 ![Grouped employee actions on mobile](screenshots/employee-actions-mobile.png)
+
+## Multi-year kafala and shop accounting
+
+Kafala debt and receipt forms store both Hijri endpoint years and months. Month counts are inclusive across year boundaries; exemptions also have endpoint years and must fit within the debt period. Opening the debt dialog recalculates its displayed amount. The receipt suggestion observes the existing Ramadan pricing exemption and remains editable to match money actually received. The latest covered collection month/year comes only from kafala receipts, never debt, discount or settlement entries, and survives reload.
+
+New worker debts persist as one entry with `balance_included=false`; worker totals include these entries once. Existing debt records with no marker retain their historical treatment as already included in employee balance fields. No old balances are rewritten. Worker statements re-read the current employee state. New nullable payment metadata preserves older records.
+
+The new shop tab uses the company's existing, expandable branch list. Each shop has a separate account: annual charges and opening dues are debits; collections and non-cash waivers are credits. A date filter carries previous years into the opening balance. Unpaid charges create no cash movement. Selecting “company actually paid” produces one outgoing cash/bank movement; collecting from the responsible person produces one incoming movement. Document references are unique within a company's branch. Retries with the same ID are idempotent; conflicting retries are rejected. Branch accounts only read their assigned shop; viewers need ledger permission; only administrators post or delete shop entries. Branches with workforce or financial records cannot be removed.
+
+The incoming/outgoing tab is now a cash/bank book with opening and closing balances, receipts, payments, running balance, branch/account/source/date filters, document references and counterpart accounts. A journal view shows balanced cash/counterpart lines. Printing and CSV export follow the selected view. This is a cashbook with counterpart presentation, not a complete general ledger, accrual system or statutory financial statement generator. Existing records whose cash/bank account was never recorded remain explicitly “unclassified cash”.
+
+Startup adds the payment/ledger metadata and `shop_entries` table without deleting historical data. `schema.sql` reflects the new schema. Test the additive migration on a backed-up staging database before deployment.
+
+Validation: `npm run check` passes 25 tests, including multi-year periods, bounded exemptions, legacy/new debt totals, shop carryforward, real cash projection, balanced journal, tenant/branch isolation, idempotent saves and protected branch removal. Browser validation is reproducible with `python tests/accounting_browser.py` against the disposable sandbox; it covers a 1447–1448 debt, receipt coverage after reload, four branches, paid/unpaid charges, collections and mobile accounting layout.
+
+![Multi-year kafala debt](screenshots/debt-multi-year-desktop.png)
+
+![Independent shop accounts](screenshots/shops-desktop.png)
+
+![Cashbook](screenshots/cashbook-desktop.png)

@@ -1,3 +1,4 @@
+import { employeeDues } from '../utils/accounting';
 import { isEmployeeCredit, isCashReceipt } from '../utils/paymentKind';
 import React, { useState } from 'react';
 import { Employee, Payment, ActivityLog, PricingSettings } from '../types';
@@ -64,7 +65,7 @@ export default function DashboardView({
       .reduce((sum, p) => sum + (p.amount || 0), 0);
 
     // Due sum
-    const empDue = (e.iqamaBalance || 0) + (e.kafalaCount * pricing.kafala) + (e.otherDebt || 0);
+    const empDue = employeeDues(e, pricing, payments);
     const balance = empPaid - empDue;
 
     const cashReceived = payments.filter(p => p.iqamaNo === e.iqamaNo && isCashReceipt(p)).reduce((sum, p) => sum + p.amount, 0);

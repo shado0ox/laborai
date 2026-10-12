@@ -1,3 +1,4 @@
+import { lastPaidKafala, formatHijriPeriod } from '../utils/accounting';
 import { isCashReceipt, isDebt as isDebtEntry, getPaymentKind, PAYMENT_KIND_LABELS } from '../utils/paymentKind';
 import { escapeHtml, printLogo } from '../utils/printSafety';
 import React, { useState, useEffect } from 'react';
@@ -73,16 +74,7 @@ export default function LedgerStatement({
   const ramadanPays = kafalaPays.filter(p => p.hijriMonth && parseInt(p.hijriMonth, 10) === 9);
 
   // Determine last paid month text
-  let lastPaidMonthText = 'لم يُسجل سداد';
-  if (kafalaPays.length > 0) {
-    const last = kafalaPays[0]; // Already ordered by date desc in parent
-    if (last.hijriMonth) {
-      const mIdx = parseInt(last.hijriMonth, 10);
-      lastPaidMonthText = `${AR_MONTH_NAMES[mIdx] || last.hijriMonth} ${last.hijriYear || ''}`;
-    } else {
-      lastPaidMonthText = last.date || last.type;
-    }
-  }
+  const lastPaidMonthText = lastPaidKafala(empPayments);
 
   // Pre-calculate estimate remaining months
   let remainingMonthsText = '';
@@ -124,9 +116,9 @@ export default function LedgerStatement({
   let subOtherDebts = 0;
 
   empPayments.forEach(p => {
-    if (isDebtEntry(p)) {
+    if (isDebtEntry(p) && p.balanceIncluded !== false) {
       const amt = parseFloat(String(p.amount || 0));
-      if (p.type?.includes('كفالة')) {
+      if (p.category === 'kafala' || p.type?.includes('كفالة')) {
         subKafalaDebts += amt;
       } else if (p.type?.includes('إقامة') || p.type?.includes('تجديد')) {
         subIqamaDebts += amt;
@@ -178,20 +170,22 @@ export default function LedgerStatement({
 
   // Add all payments / transactions
   empPayments.forEach((p, idx) => {
-    const isKafala = p.type?.includes('كفالة');
+    const isKafala = p.category === 'kafala' || p.type?.includes('كفالة');
     const isIqama = p.type?.includes('تجديد') || p.type?.includes('إقامة');
     const isRamadan = isKafala && p.hijriMonth && parseInt(p.hijriMonth, 10) === 9;
     const isDebt = isDebtEntry(p);
     
     let hijriLabel = '';
-    if (isKafala && p.hijriMonth) {
+    if (p.kafalaPeriod) {
+      hijriLabel = formatHijriPeriod(p.kafalaPeriod);
+    } else if (isKafala && p.hijriMonth) {
       const idxM = parseInt(p.hijriMonth, 10);
       hijriLabel = `${AR_MONTH_NAMES[idxM] || p.hijriMonth} ${p.hijriYear || ''}`;
     } else if (isIqama) {
       hijriLabel = 'إقامة';
     }
 
-    const desc = (isCashReceipt(p) || isDebtEntry(p) || p.type === PAYMENT_KIND_LABELS[getPaymentKind(p)] ? p.type : `${PAYMENT_KIND_LABELS[getPaymentKind(p)]}: ${p.type}`) + (isRamadan && pricing.ramadanFree ? ' 🎁 عفو رمضان المجاني' : '') + (p.notes ? ` — ${p.notes}` : '');
+    const desc = (isCashReceipt(p) || isDebtEntry(p) || p.type === PAYMENT_KIND_LABELS[getPaymentKind(p)] ? p.type : `${PAYMENT_KIND_LABELS[getPaymentKind(p)]}: ${p.type}`) + (isRamadan && pricing.ramadanFree && p.amount === 0 ? ' 🎁 عفو رمضان المجاني' : '') + (p.notes ? ` — ${p.notes}` : '');
     
     if (isDebt) {
       ledger.push({
@@ -413,7 +407,7 @@ export default function LedgerStatement({
             </div>
           </div>
           <div class="stat-card" style="border-right: 4px solid #0d5189;">
-            <div class="label">مسدد له كفالة حتى شهر</div>
+            <div class="label">آخر شهر كفالة سُجل له تحصيل</div>
             <div class="value" style="font-size:12px;">${escapeHtml(lastPaidMonthText)}</div>
           </div>
         </div>
@@ -540,7 +534,7 @@ export default function LedgerStatement({
         </div>
 
         <div className="bg-primary/5 border border-primary/10 rounded-2xl p-4 text-center">
-          <span className="text-xs text-slate-400 block mb-1">آخر كفالة مسددة</span>
+          <span className="text-xs text-slate-400 block mb-1">آخر شهر سُجل له تحصيل كفالة</span>
           <span className="text-sm font-bold text-primary block mt-1.5">{lastPaidMonthText}</span>
         </div>
       </div>
