@@ -36,7 +36,7 @@ export default function AlertsListView({
 
   // Compute debtors (balance < 0)
   const debtorsList = activeEmployees.map(e => {
-    const empPays = payments.filter(p => (p.iqamaNo === e.iqamaNo || p.name === e.name) && !p.type?.includes('مديونية'));
+    const empPays = payments.filter(p => (p.iqamaNo === e.iqamaNo) && !p.type?.includes('مديونية'));
     const paid = empPays.reduce((sum, p) => sum + (p.amount || 0), 0);
     const due = (e.iqamaBalance || 0) + (e.kafalaCount * pricing.kafala) + (e.otherDebt || 0);
     const balance = paid - due;
@@ -53,7 +53,7 @@ export default function AlertsListView({
         
         <div className="bg-gradient-to-r from-red-700 to-red-650 px-5 py-4 text-white flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Clock className="w-5 h-5 animate-pulse text-yellow-300" />
+            <Clock className="w-5 h-5  text-yellow-300" />
             <div>
               <h3 className="font-extrabold text-sm">مستندات وإقامات تنتهي قريباً (أقل من 90 يوم)</h3>
               <p className="text-[10px] text-red-100 mt-0.5">تنبيه آلي عاجل لتجديد الوثائق وفواتير الإقامات لتلافي الغرامات القانونية.</p>
@@ -96,7 +96,7 @@ export default function AlertsListView({
                     <td className="px-4 py-3 text-center font-mono">{e.iqamaExpiry}</td>
                     <td className="px-4 py-3 text-center font-extrabold text-[#0d5189]">{hExp}</td>
                     <td className="px-4 py-3 text-center">
-                      <span className={`px-2 py-1 rounded-full font-black ${isCritical ? 'bg-red-200 text-red-900 animate-pulse' : 'bg-amber-100 text-amber-800'}`}>
+                      <span className={`px-2 py-1 rounded-full font-black ${isCritical ? 'bg-red-200 text-red-900 ' : 'bg-amber-100 text-amber-800'}`}>
                         {e.daysLeft !== null ? (e.daysLeft < 0 ? `منتهية بـ ${Math.abs(e.daysLeft)} يوم` : `${e.daysLeft} يوم متبقي`) : '-'}
                       </span>
                     </td>

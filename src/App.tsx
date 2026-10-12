@@ -2,9 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { 
   Employee, Payment, PricingSettings, CompanySettings, UserProfile, ActivityLog 
 } from './types';
-import { 
-  INITIAL_BRANCHES, INITIAL_EMPLOYEES, INITIAL_LOGS, INITIAL_PAYMENTS, INITIAL_USERS 
-} from './utils/dummyData';
 
 import SidebarMenu from './components/SidebarMenu';
 import DashboardView from './components/DashboardView';
@@ -60,6 +57,8 @@ export default function App() {
   const [authToken, setAuthToken] = useState<string | null>(() => sessionStorage.getItem('authToken') || null);
 
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [connectionError, setConnectionError] = useState('');
+  const [newUserPassword, setNewUserPassword] = useState('');
   const [selectedStatementEmp, setSelectedStatementEmp] = useState<Employee | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
@@ -92,10 +91,19 @@ export default function App() {
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
-    return fetch(url, {
-      ...options,
-      headers
-    });
+    try {
+      const response = await fetch(url, { ...options, headers });
+      if (response.status === 401 && token) {
+        setCurrentUser(null); setAuthToken(null); setUsers([]); setEmployees([]); setPayments([]); setLogs([]);
+        sessionStorage.removeItem('labor_current_user'); sessionStorage.removeItem('authToken');
+      }
+      if (response.status >= 500) setConnectionError('تعذر الاتصال بقاعدة البيانات. لم يتم حفظ التغييرات؛ حاول لاحقاً.');
+      else if (response.ok) setConnectionError('');
+      return response;
+    } catch (error) {
+      setConnectionError('تعذر الاتصال بالخادم. تحقق من الاتصال ثم أعد المحاولة.');
+      throw error;
+    }
   };
 
   const fetchDbStatus = async () => {
@@ -252,41 +260,24 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // 1. Initial global app boot loader
+  // Refresh server-owned capabilities on reload; never infer developer access from email.
   useEffect(() => {
-    async function loadGlobalData() {
-      try {
-        const res = await authFetch('/api/users');
-        if (res.ok) {
-          const fetchedUsers = await res.json() as UserProfile[];
-          if (fetchedUsers.length === 0) {
-            // Seed INITIAL_USERS to database
-            for (const u of INITIAL_USERS) {
-              await authFetch('/api/users', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(u)
-              });
-            }
-            setUsers(INITIAL_USERS);
-          } else {
-            setUsers(fetchedUsers);
-          }
-        } else {
-          setUsers(INITIAL_USERS);
-        }
-
-        // ملاحظة: currentUser بقى يترجع تلقائيًا من sessionStorage عند أول تحميل
-        // (انظر الـ lazy initializer فوق)، فمحتاجين بس نضبط التاب النشط لحساب المطور.
-        if (currentUser && currentUser.email === 'shady.nasif@gmail.com') {
-          setActiveTab('dev_panel');
-        }
-      } catch (e) {
-        console.warn('API global boot error (offline fallback used):', e);
-        setUsers(INITIAL_USERS);
+    if (!authToken) return;
+    let cancelled = false;
+    async function loadSession() {
+      const response = await authFetch('/api/auth/me');
+      if (!response.ok || cancelled) return;
+      const user = await response.json();
+      setCurrentUser(user);
+      sessionStorage.setItem('labor_current_user', JSON.stringify(user));
+      if (user.isDeveloper) setActiveTab('dev_panel');
+      if (user.role === 'admin') {
+        const usersResponse = await authFetch('/api/users');
+        if (usersResponse.ok && !cancelled) setUsers(await usersResponse.json());
       }
     }
-    loadGlobalData();
+    loadSession().catch(() => {});
+    return () => { cancelled = true; };
   }, [authToken]);
 
   // 2. Tenant/Workspace data loader - triggers whenever currentUser changes!
@@ -313,36 +304,10 @@ export default function App() {
         const branchRes = await authFetch(`/api/branches?tenantId=${tid}`);
         if (branchRes.ok) {
           const data = await branchRes.json();
-          if (data && data.length > 0) {
-            setBranches(data);
-          } else {
-            const initialBrs = tid ? [] : INITIAL_BRANCHES;
-            setBranches(initialBrs);
-            if (initialBrs.length > 0) {
-              await authFetch(`/api/branches?tenantId=${tid}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(initialBrs)
-              });
-            }
-          }
+          setBranches(data);
         }
-
-        // Fetch Logs
         const logRes = await authFetch(`/api/logs?tenantId=${tid}`);
-        if (logRes.ok) {
-          const data = await logRes.json();
-          if (data && data.length > 0) {
-            setLogs(data);
-          } else {
-            setLogs(INITIAL_LOGS);
-            await authFetch(`/api/logs?tenantId=${tid}`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(INITIAL_LOGS[0])
-            });
-          }
-        }
+        setLogs(logRes.ok ? await logRes.json() : []);
 
         // Fetch Company
         const compRes = await authFetch(`/api/company-settings?tenantId=${tid}`);
@@ -387,11 +352,11 @@ export default function App() {
     } else {
       // No custom company logo uploaded yet: fall back to the app's own branded icon
       if (link) {
-        link.href = '/brand-icon.svg';
+        link.href = '/favicon.ico';
       } else {
         const newLink = document.createElement('link');
         newLink.rel = 'icon';
-        newLink.href = '/brand-icon.svg';
+        newLink.href = '/favicon.ico';
         document.head.appendChild(newLink);
       }
     }
@@ -402,8 +367,13 @@ export default function App() {
     setEmployees(list);
   };
 
-  const savePayments = (list: Payment[]) => {
-    setPayments(list);
+  const handleDeletePayment = async (id: string, name: string, amount: number) => {
+    try {
+      const response = await authFetch(`/api/payments/${encodeURIComponent(id)}?tenantId=${currentUser?.tenantId || ''}`, { method: 'DELETE' });
+      if (!response.ok) throw new Error((await response.json()).error || 'تعذر حذف الدفعة');
+      setPayments(previous => previous.filter(payment => payment.id !== id));
+      logActivity('del', `حذف دفعة بمبلغ ${amount.toLocaleString()} ريال للموظف ${name}`);
+    } catch (error: any) { alert(error.message || 'لم يتم حذف الدفعة. أعد المحاولة.'); }
   };
 
   const saveBranchesList = async (list: string[]): Promise<boolean> => {
@@ -449,30 +419,14 @@ export default function App() {
     setAuthToken(token);
     sessionStorage.setItem('labor_current_user', JSON.stringify(user));
     sessionStorage.setItem('authToken', token);
-    if (user.email === 'shady.nasif@gmail.com') {
+    if (user.isDeveloper) {
       setActiveTab('dev_panel');
     } else {
       setActiveTab('dashboard');
     }
   };
 
-  const handleRegisterSubmit = async (newUser: UserProfile) => {
-    try {
-      const res = await authFetch('/api/users', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newUser)
-      });
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || `فشل التسجيل (HTTP ${res.status})`);
-      }
-      setUsers(prev => [...prev, newUser]);
-    } catch (err: any) {
-      console.error('API register user error:', err);
-      alert(`⚠️ لم يتم حفظ التسجيل في قاعدة البيانات: ${err.message || 'تعذر الاتصال بالخادم'}`);
-    }
-  };
+  const handleRegisterSubmit = (_newUser: UserProfile) => {};
 
   const handleUpdateUserStatus = async (uid: string, status: 'approved' | 'rejected') => {
     const uName = users.find(u => u.uid === uid)?.name || 'مستخدم غير معروف';
@@ -500,7 +454,7 @@ export default function App() {
 
   const handleDeleteUser = async (uid: string) => {
     const targetUser = users.find(u => u.uid === uid);
-    if (targetUser?.email === 'shady.nasif@gmail.com') {
+    if (targetUser?.isDeveloper) {
       toastNotice('⚠️ خطأ: لا يمكن حذف حساب مطور البرنامج الرئيسي!');
       return;
     }
@@ -844,7 +798,7 @@ export default function App() {
       setEmployees([]);
       setPayments([]);
       
-      const initialBrs = tid ? [] : INITIAL_BRANCHES;
+      const initialBrs: string[] = [];
       const branchesRes = await authFetch(`/api/branches?tenantId=${tid}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -855,9 +809,9 @@ export default function App() {
       const logsRes = await authFetch(`/api/logs?tenantId=${tid}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(INITIAL_LOGS[0])
+        body: JSON.stringify({ id: crypto.randomUUID(), type: 'update', text: 'تم مسح بيانات مساحة العمل.', user: currentUser.name, time: new Date().toISOString() })
       });
-      if (logsRes.ok) setLogs(INITIAL_LOGS);
+      if (logsRes.ok) setLogs([]);
       
       const defaultCompanyObj = { name: tid ? `لوحة حسابات ومساحة ${currentUser.name}` : 'برنامج إدارة العمالة المهنية' };
       const defaultPricingObj = { kafala: 250, iqama3: 3550, iqama6: 7100, iqama12: 14200, ramadanFree: true };
@@ -933,15 +887,11 @@ export default function App() {
     if (!newUserName.trim() || !newUserEmail.trim()) return;
 
     const emailLower = newUserEmail.trim().toLowerCase();
-    if (emailLower === 'shady.nasif@gmail.com') {
-      toastNotice('⚠️ خطأ أمني: لا يمكن تسجيل مستخدم بالبريد الإلكتروني الخاص بالمطور الرئيسي!');
-      return;
-    }
-    
     const newUser: UserProfile = {
       uid: `u_${Date.now()}`,
       name: newUserName.trim(),
       email: newUserEmail.trim(),
+      password: newUserPassword,
       role: newUserRole,
       branch: newUserRole === 'branch' ? newUserBranch || branches[0] : undefined,
       status: 'approved',
@@ -959,7 +909,9 @@ export default function App() {
         const errData = await res.json().catch(() => ({}));
         throw new Error(errData.error || `فشل الحفظ (HTTP ${res.status})`);
       }
-      setUsers(prev => [...prev, newUser]);
+      const saved = await res.json();
+      setUsers(prev => [...prev, saved.user]);
+      setNewUserPassword('');
       setNewUserName('');
       setNewUserEmail('');
       logActivity('update', `دعوة وتسجيل مستخدم برتبة صلاحية جديدة: ${newUserName} (${newUserRole})`);
@@ -1082,7 +1034,7 @@ export default function App() {
 
     // debtors count
     const debtCount = active.filter(e => {
-      const pmts = payments.filter(p => (p.iqamaNo === e.iqamaNo || p.name === e.name) && !p.type?.includes('مديونية'));
+      const pmts = payments.filter(p => (p.iqamaNo === e.iqamaNo) && !p.type?.includes('مديونية'));
       const paid = pmts.reduce((s, p) => s + (p.amount || 0), 0);
       const due = (e.iqamaBalance || 0) + (e.kafalaCount * pricingSettings.kafala) + (e.otherDebt || 0);
       return (paid - due) < 0;
@@ -1117,7 +1069,7 @@ export default function App() {
   }
 
   // Suspended subscription check: developer is immune
-  if (isSubscriptionExpired && currentUser.email !== 'shady.nasif@gmail.com') {
+  if (isSubscriptionExpired && !currentUser.isDeveloper) {
     return (
       <div className="min-h-screen bg-[#071329] flex flex-col justify-center items-center p-6 text-center text-white font-sans" id="subscription-suspended-screen">
         <div className="max-w-md bg-white/5 backdrop-blur-lg rounded-3xl p-8 border border-white/10 shadow-2xl space-y-6 animate-fade-in">
@@ -1142,7 +1094,7 @@ export default function App() {
               <span className="text-xs text-slate-400 block font-bold">هاتف التواصل المباشر مع المطور للتجديد:</span>
               <a 
                 href={`tel:${companySettings.supportPhone}`} 
-                className="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2.5 rounded-xl font-bold text-xs transition-all shadow-md select-all"
+                className="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2.5 rounded-xl font-bold text-xs transition-colors shadow-md select-all"
               >
                 <span>📞 {companySettings.supportPhone}</span>
               </a>
@@ -1193,23 +1145,28 @@ export default function App() {
       />
 
       {/* 2. Primary Layout Shell Area */}
-      <div className="flex-1 flex flex-col lg:mr-[275px] min-w-0 transition-all duration-300">
+      <div className="flex-1 flex flex-col lg:mr-[275px] min-w-0 transition-colors duration-300">
         
+        <a href="#main-content" className="skip-link">انتقل إلى المحتوى</a>
         {/* Top Sticky Header */}
-        <header className="sticky top-0 bg-white/95 backdrop-blur-md border-b border-slate-200 px-6 py-4 flex justify-between items-center z-30">
+        <header className="app-header sticky top-0 bg-white/95 backdrop-blur-md border-b border-slate-200 px-6 py-4 flex justify-between items-center z-30">
           <div className="flex items-center gap-3">
             <button 
+              aria-label="فتح قائمة التنقل" aria-expanded={isSidebarOpen} aria-controls="app-navigation"
               onClick={() => setIsSidebarOpen(!isSidebarOpen)}
               className="p-1.5 hover:bg-slate-100 rounded-lg lg:hidden transition-colors cursor-pointer text-slate-800"
             >
               <Menu className="w-6 h-6" />
             </button>
             <h2 className="text-sm font-extrabold text-[#002f56] select-none uppercase tracking-wide">
-              {activeTab === 'dashboard' && 'لوحة القيادة والمتابعة الفورية'}
-              {activeTab === 'employees' && 'إدارة وإحصاء مِلَفّات العمالة الموثقة'}
+              {activeTab === 'dashboard' && 'لوحة المتابعة'}
+              {activeTab === 'employees' && 'ملفات العمالة'}
               {activeTab === 'approvals' && 'إدارة طلبات التسجيل والموافقات بالبوابة'}
               {activeTab === 'alerts' && 'الإنذارات العاجلة والإقامات المنتهية'}
-              {activeTab === 'payments' && 'دفتر قيود وإيرادات التحصيلات النقدية'}
+              {activeTab === 'payments' && 'المدفوعات والتحصيلات'}
+              {activeTab === 'general_ledger' && 'الدفتر العام'}
+              {activeTab === 'dev_panel' && 'إدارة النظام'}
+              {activeTab === 'spaces' && 'الشركات والاشتراكات'}
               {activeTab === 'monthly' && 'التقارير والمقاصات المالية الشهرية'}
               {activeTab === 'archive' && 'شاشات الأرشيف والمسودات السابقة'}
               {activeTab === 'settings' && 'إعدادات المنظومة وصلاحيات الهوية'}
@@ -1218,10 +1175,10 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2">
-            {currentUser.email === 'shady.nasif@gmail.com' && (
+            {currentUser.isDeveloper && (
               dbStatusInfo?.status === 'connected' ? (
                 <span className="text-[10px] bg-emerald-50 text-emerald-850 px-2.5 py-1.5 rounded-xl border border-emerald-100/50 font-black flex items-center gap-1 select-none">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 "></span>
                   قاعدة البيانات: متصلة ✅
                 </span>
               ) : (
@@ -1238,11 +1195,12 @@ export default function App() {
         </header>
 
         {/* 3. Main Central App Area */}
-        <main className="flex-grow p-4 md:p-6 lg:p-8 bg-[#f4f7fc]/50">
+        <main id="main-content" className="app-main flex-grow p-4 md:p-6 lg:p-8 bg-[#f4f7fc]/50">
 
+          {connectionError && <div role="alert" className="mb-4 p-4 rounded-lg border border-red-200 bg-red-50 text-red-800">{connectionError}</div>}
           {/* Subscription Warning Banner (Warns 30 days before expiration) */}
-          {isSubscriptionNearExpiration && currentUser.email !== 'shady.nasif@gmail.com' && (
-            <div className="mb-6 p-4 bg-gradient-to-r from-amber-50 to-amber-100/60 border border-amber-200 rounded-2xl shadow-sm text-slate-800 flex flex-col md:flex-row items-center justify-between gap-3 animate-pulse" id="subscription-warning-banner">
+          {isSubscriptionNearExpiration && !currentUser.isDeveloper && (
+            <div className="mb-6 p-4 bg-gradient-to-r from-amber-50 to-amber-100/60 border border-amber-200 rounded-2xl shadow-sm text-slate-800 flex flex-col md:flex-row items-center justify-between gap-3 " id="subscription-warning-banner">
               <div className="flex items-start gap-3">
                 <span className="text-2xl mt-0.5">⏳</span>
                 <div className="space-y-0.5">
@@ -1282,7 +1240,7 @@ export default function App() {
               {migrationStatus === 'idle' && (
                 <button
                   onClick={runMigration}
-                  className="px-4 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-black transition-all shadow-md cursor-pointer flex items-center gap-1.5"
+                  className="px-4 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-black transition-colors shadow-md cursor-pointer flex items-center gap-1.5"
                 >
                   <Upload className="w-4 h-4" />
                   بدء ترحيل ونقل كافة البيانات إلى السيرفر ⚡
@@ -1325,7 +1283,7 @@ export default function App() {
           )}
           
           {/* 🌟 Professional Glassmorphic Content Panel with Custom Shadow & Padding 🌟 */}
-          <div className="flex flex-col gap-6 p-5 md:p-7 bg-white rounded-3xl border border-slate-200/50 shadow-[0_15px_45px_0_rgba(11,40,68,0.06),0_2px_8px_-2px_rgba(0,0,0,0.015)] min-w-0 transition-all duration-300">
+          <div className="app-content flex flex-col gap-6 p-4 md:p-6 bg-white rounded-xl border border-slate-200/50 shadow-[0_15px_45px_0_rgba(11,40,68,0.06),0_2px_8px_-2px_rgba(0,0,0,0.015)] min-w-0 transition-colors duration-300">
             
             {/* Detailed Statement View triggered (Overrides the tab content like a detail sheet) */}
             {selectedStatementEmp ? (
@@ -1345,11 +1303,7 @@ export default function App() {
                 logoBase64={companySettings.logoBase64}
                 onClose={() => setSelectedStatementEmp(null)}
                 currentUser={currentUser}
-                onDeletePayment={(id, name, amount) => {
-                  const filtered = payments.filter(p => p.id !== id);
-                  savePayments(filtered);
-                  logActivity('del', `حذف قيد من كشف الحساب بمبلغ ${amount.toLocaleString()} ريال للموظف ${name}`);
-                }}
+                onDeletePayment={handleDeletePayment}
               />
             </div>
           ) : (
@@ -1369,7 +1323,7 @@ export default function App() {
               )}
 
               {/* Tab: Approvals */}
-              {activeTab === 'approvals' && currentUser.email === 'shady.nasif@gmail.com' && (
+              {activeTab === 'approvals' && currentUser.isDeveloper && (
                 <PortalApprovalsView 
                   users={users}
                   onUpdateUserStatus={handleUpdateUserStatus}
@@ -1380,7 +1334,7 @@ export default function App() {
               )}
 
               {/* Tab: System Developer Panel */}
-              {activeTab === 'dev_panel' && currentUser.email === 'shady.nasif@gmail.com' && (
+              {activeTab === 'dev_panel' && currentUser.isDeveloper && (
                 <PortalDevPanelView
                   currentUser={currentUser}
                   users={users}
@@ -1391,7 +1345,7 @@ export default function App() {
               )}
 
               {/* Tab: Subscriber Spaces Management */}
-              {activeTab === 'spaces' && currentUser.email === 'shady.nasif@gmail.com' && (
+              {activeTab === 'spaces' && currentUser.isDeveloper && (
                 <PortalSpacesView
                   currentUser={currentUser}
                   users={users}
@@ -1443,11 +1397,7 @@ export default function App() {
                   payments={payments}
                   branches={branches}
                   currentUser={currentUser}
-                  onDeletePayment={(id, n, amt) => {
-                    const filtered = payments.filter(p => p.id !== id);
-                    savePayments(filtered);
-                    logActivity('del', `حذف قيد مالي محصل بمبلغ ${amt.toLocaleString()} ريال للموظف ${n}`);
-                  }}
+                  onDeletePayment={handleDeletePayment}
                 />
               )}
 
@@ -1489,7 +1439,7 @@ export default function App() {
                       </thead>
                       <tbody className="divide-y divide-slate-100 text-slate-700">
                         {employees.filter(e => e.status === 'archived').map((e, idx) => (
-                          <tr key={e.iqamaNo} className="hover:bg-slate-50/50 transition-all">
+                          <tr key={e.iqamaNo} className="hover:bg-slate-50/50 transition-colors">
                             <td className="px-4 py-3 text-center text-slate-400 font-mono">{idx + 1}</td>
                             <td className="px-4 py-3 font-semibold text-slate-900">{e.name}</td>
                             <td className="px-4 py-3 text-center font-mono">{e.iqamaNo}</td>
@@ -1502,7 +1452,7 @@ export default function App() {
                               <td className="px-4 py-3 text-center">
                                 <button 
                                   onClick={() => handleRestoreEmployee(e.iqamaNo)}
-                                  className="px-2.5 py-1 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-lg font-bold transition-all cursor-pointer"
+                                  className="px-2.5 py-1 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-lg font-bold transition-colors cursor-pointer"
                                 >
                                   إلغاء الأرشفة والارجاع للنظام ↩️
                                 </button>
@@ -1524,7 +1474,7 @@ export default function App() {
               )}
 
               {/* Tab: System Settings brand and rules */}
-              {activeTab === 'settings' && (
+              {activeTab === 'settings' && currentUser.role === 'admin' && (
                 <div className="space-y-6">
                   
                   {/* Grid forms settings */}
@@ -1571,7 +1521,7 @@ export default function App() {
                               {companySettings.logoBase64 && (
                                 <button 
                                   onClick={handleClearCompanyLogo}
-                                  className="px-3 py-1.5 bg-rose-50 text-rose-700 hover:bg-rose-100 rounded-lg font-bold transition-all text-[10px]"
+                                  className="px-3 py-1.5 bg-rose-50 text-rose-700 hover:bg-rose-100 rounded-lg font-bold transition-colors text-[10px]"
                                 >
                                   حذف الحالي
                                 </button>
@@ -1731,11 +1681,11 @@ export default function App() {
                           </thead>
                           <tbody>
                             {users.filter(u => {
-                              if (currentUser.email === 'shady.nasif@gmail.com') {
+                              if (currentUser.isDeveloper) {
                                 // مطور البرنامج يرى فقط مدراء المساحات (المدراء الرئيسيين) ولا يرى المساعدين أو المشرفين الفرعيين
                                 return u.role === 'admin';
                               }
-                              if (u.email === 'shady.nasif@gmail.com') return false;
+                              if (u.isDeveloper) return false;
                               return !currentUser.tenantId || u.tenantId === currentUser.tenantId;
                             }).map(u => (
                               <tr key={u.uid} className="border-b border-slate-100">
@@ -1770,7 +1720,7 @@ export default function App() {
                         
                         <div className="grid grid-cols-2 gap-3">
                           <input 
-                            type="text" 
+                            type="text" name="member-name" aria-label="اسم المستخدم الجديد" autoComplete="name"
                             value={newUserName}
                             onChange={(e) => setNewUserName(e.target.value)}
                             required
@@ -1778,18 +1728,19 @@ export default function App() {
                             className="py-1.5 px-2 bg-slate-50 border border-slate-200 rounded-lg text-xs" 
                           />
                           <input 
-                            type="email" 
+                            type="email" name="member-email" aria-label="بريد المستخدم الجديد" autoComplete="email" spellCheck={false}
                             value={newUserEmail}
                             onChange={(e) => setNewUserEmail(e.target.value)}
                             required
                             placeholder="البريد الإلكتروني" 
                             className="py-1.5 px-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono" 
                           />
+                        <input type="password" name="new-user-password" aria-label="كلمة مرور المستخدم الجديد" autoComplete="new-password" minLength={8} required value={newUserPassword} onChange={e => setNewUserPassword(e.target.value)} placeholder="كلمة مرور المستخدم (8 أحرف على الأقل)" className="col-span-2 w-full py-2 px-3 border border-slate-200 rounded-lg text-sm" />
                         </div>
 
                         <div className="grid grid-cols-2 gap-3">
                           <select 
-                            value={newUserRole} 
+                            aria-label="صلاحية المستخدم الجديد" value={newUserRole}
                             onChange={(e) => setNewUserRole(e.target.value as any)}
                             className="py-1.5 px-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
                           >
@@ -1800,7 +1751,7 @@ export default function App() {
                           
                           {newUserRole === 'branch' && (
                             <select 
-                              value={newUserBranch} 
+                              aria-label="فرع المستخدم الجديد" value={newUserBranch}
                               onChange={(e) => setNewUserBranch(e.target.value)}
                               className="py-1.5 px-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
                             >
@@ -1849,7 +1800,7 @@ export default function App() {
               )}
 
               {/* Tab: Local Server integration guide */}
-              {activeTab === 'docker' && currentUser.email === 'shady.nasif@gmail.com' && (
+              {activeTab === 'docker' && currentUser.isDeveloper && (
                 <div className="space-y-6">
                   {/* Database Status Diagnostics Card */}
                   <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-4">
@@ -1860,12 +1811,12 @@ export default function App() {
                       </div>
                       {dbStatusInfo === null ? (
                         <span className="px-3 py-1 bg-amber-100 text-amber-800 border border-amber-200 text-xs rounded-xl font-black flex items-center gap-1.5">
-                          <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping"></span>
+                          <span className="w-2 h-2 rounded-full bg-amber-500 "></span>
                           جاري الاتصال بالسيرفر... 🔄
                         </span>
                       ) : dbStatusInfo.status === 'connected' ? (
                         <span className="px-3 py-1 bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs rounded-xl font-black flex items-center gap-1.5">
-                          <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                          <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 "></span>
                           نشط ومتصل ✅
                         </span>
                       ) : (

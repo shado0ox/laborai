@@ -57,7 +57,7 @@ export default function DashboardView({
   activeEmployees.forEach(e => {
     // Paid sum
     const empPaid = payments
-      .filter(p => (p.iqamaNo === e.iqamaNo || p.name === e.name) && !p.type?.includes('مديونية'))
+      .filter(p => (p.iqamaNo === e.iqamaNo) && !p.type?.includes('مديونية'))
       .reduce((sum, p) => sum + (p.amount || 0), 0);
 
     // Due sum
@@ -80,7 +80,7 @@ export default function DashboardView({
     }
 
     if (daysDiff !== null) {
-      if (daysDiff >= 0 && daysDiff <= 30) {
+      if (daysDiff <= 30) {
         criticalCount30++;
       } else if (daysDiff > 30 && daysDiff <= 60) {
         alertCount60++;
@@ -94,7 +94,7 @@ export default function DashboardView({
       branchMap[b].totalDues += empDue;
       branchMap[b].totalPaid += empPaid;
       if (balance < 0) branchMap[b].debtorsCount++;
-      if (daysDiff !== null && daysDiff >= 0 && daysDiff <= 30) branchMap[b].criticalCount++;
+      if (daysDiff !== null && daysDiff <= 30) branchMap[b].criticalCount++;
     }
   });
 
@@ -104,11 +104,11 @@ export default function DashboardView({
   const filteredLogs = logFilter ? logs.filter(l => l.type === logFilter) : logs;
 
   const kpis = [
-    { label: 'إجمالي الموظفين النشطين', value: activeEmployees.length, sub: 'بالمواقع الحقلية والفروع', color: 'border-r-4 border-sky-500 bg-sky-50/20 text-sky-800' },
-    { label: 'تجديدات حرجة (خلال 30 يوم)', value: criticalCount30, sub: 'تتطلب تمديداً فوريّاً', color: `border-r-4 border-red-500 ${criticalCount30 > 0 ? 'bg-red-50 text-red-800 animate-pulse' : 'bg-slate-50 text-slate-700'}` },
-    { label: 'تجديدات وشيكة (خلال 60 يوم)', value: alertCount60, sub: 'المهلة والمطابقات جارية', color: 'border-r-4 border-amber-500 bg-amber-50/20 text-amber-800' },
+    { label: 'إجمالي الموظفين النشطين', value: activeEmployees.length, sub: 'في الفروع التابعة لمنشأتك', color: 'border-r-4 border-sky-500 bg-sky-50/20 text-sky-800' },
+    { label: 'إقامات منتهية أو خلال 30 يوم', value: criticalCount30, sub: 'تتطلب تمديداً فوريّاً', color: `border-r-4 border-red-500 ${criticalCount30 > 0 ? 'bg-red-50 text-red-800 ' : 'bg-slate-50 text-slate-700'}` },
+    { label: 'تجديدات وشيكة (خلال 60 يوم)', value: alertCount60, sub: 'تحتاج متابعة قبل انتهائها', color: 'border-r-4 border-amber-500 bg-amber-50/20 text-amber-800' },
     { label: 'عمالة يترتب عليهم مبالغ', value: activeDebtorsCount, sub: 'تصفية الذمم المالية معلّقة', color: 'border-r-4 border-violet-500 bg-violet-50/20 text-violet-800' },
-    { label: 'إجمالي المستحقات العالقة', value: `${totalOutstanding.toLocaleString()} ريال`, sub: 'ثمن الكفالة ورخص الإقامة', color: 'border-r-4 border-rose-500 bg-rose-50/20 text-rose-800' },
+    { label: 'إجمالي المستحقات العالقة', value: `${totalOutstanding.toLocaleString()} ريال`, sub: 'الرصيد بعد خصم المقبوضات', color: 'border-r-4 border-rose-500 bg-rose-50/20 text-rose-800' },
     { label: 'إجمالي المقبوضات المحصلة', value: `${totalPayments.toLocaleString()} ريال`, sub: 'المودعة بالخزينة والحسابات', color: 'border-r-4 border-emerald-500 bg-emerald-50/20 text-emerald-800' },
     { label: 'مستندات العمالة المؤرشفة', value: archivedCount, sub: 'خدمات منقولة واستبعاد نهائي', color: 'border-r-4 border-slate-500 bg-slate-50/20 text-slate-800' }
   ];
@@ -133,27 +133,27 @@ export default function DashboardView({
           )}
           <div>
             <div className="flex items-center gap-1.5 text-slate-500 text-[10px] font-bold">
-              <span>لوحة المؤشرات والمعلومات التحليلية الفورية</span>
+              <span>ملخص مساحة العمل</span>
             </div>
-            <h2 className="text-sm font-black text-[#0b2844] mt-0.5">مرحباً، {activeRole === 'admin' ? 'المدير العام للمنظومة' : 'المشرف المسؤول عن الفرع'}</h2>
+            <h2 className="text-sm font-black text-[#0b2844] mt-0.5">متابعة العمالة والإقامات والتحصيل</h2>
           </div>
         </div>
         <div className="shrink-0 flex items-center gap-1.5 text-[10px] bg-white border border-slate-200/80 shadow-xs rounded-lg py-1 px-2">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
-          <span className="text-slate-600 font-bold">حالة تدفق البيانات:</span>
-          <span className="font-mono bg-emerald-50 text-emerald-800 px-1 py-0.2 rounded font-bold text-[9px]">نشط تلقائياً</span>
+          <span className="w-2 h-2 rounded-full bg-emerald-500 "></span>
+          <span className="text-slate-600 font-bold">البيانات المعروضة:</span>
+          <span className="font-mono bg-emerald-50 text-emerald-800 px-1 py-0.2 rounded font-bold text-[9px]">آخر تحميل</span>
         </div>
       </div>
 
       {/* High-Density KPI Control Hub */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
+      <div className="dashboard-kpis grid grid-cols-1 min-[420px]:grid-cols-2 xl:grid-cols-4 gap-3">
         {kpis.map((k, ind) => (
-          <div key={ind} className={`p-3 rounded-xl border border-slate-200/70 shadow-[0_2px_8px_-3px_rgba(0,0,0,0.03)] ${k.color} flex flex-col justify-between transition-all duration-300 hover:-translate-y-0.5 hover:shadow-2xs`}>
+          <div key={ind} className={`p-3 rounded-xl border border-slate-200/70 shadow-[0_2px_8px_-3px_rgba(0,0,0,0.03)] ${k.color} flex flex-col justify-between transition-colors duration-300 `}>
             <div>
-              <span className="text-[10px] text-slate-500 block truncate font-semibold">{k.label}</span>
-              <span className="text-base md:text-lg font-black block leading-none mt-1 tracking-tight">{k.value}</span>
+              <span className="text-sm text-slate-600 block font-semibold">{k.label}</span>
+              <span className="text-2xl font-bold block leading-tight mt-1 tracking-tight">{k.value}</span>
             </div>
-            <span className="text-[9px] text-slate-400 block mt-1.5 font-normal truncate">{k.sub}</span>
+            <span className="text-xs text-slate-500 block mt-2 font-normal">{k.sub}</span>
           </div>
         ))}
       </div>
@@ -166,7 +166,7 @@ export default function DashboardView({
           <div className="flex items-center justify-between border-b border-slate-100 pb-3">
             <h3 className="text-sm font-black text-slate-800 flex items-center gap-2">
               <span className="inline-block w-2.5 h-4 bg-primary rounded-sm"></span>
-              <span>تحليل عمالة الفروع وبناء المقاصة الشاملة</span>
+              <span>متابعة الفروع</span>
             </h3>
             <span className="text-[10px] text-slate-400 font-bold">بموجب آخر حركات</span>
           </div>
@@ -186,7 +186,7 @@ export default function DashboardView({
                   <div className="space-y-2 text-xs">
                     <div className="flex justify-between text-slate-500">
                       <span>إقامات متبقي أقل من 30 يوم:</span>
-                      <strong className={stats.criticalCount > 0 ? 'text-red-600 animate-pulse font-black' : 'text-slate-700'}>
+                      <strong className={stats.criticalCount > 0 ? 'text-red-600  font-black' : 'text-slate-700'}>
                         {stats.criticalCount} وثائق
                       </strong>
                     </div>
@@ -210,6 +210,7 @@ export default function DashboardView({
             })}
           </div>
 
+          {branches.length === 0 && <p className="text-sm text-slate-600 py-6">لا توجد فروع بعد. أضف فرعًا من إعدادات الشركة لبدء تسجيل العمالة.</p>}
           {/* Visual Percentage Progress Charts */}
           <div className="bg-[#fcfdfe] p-4 rounded-xl border border-slate-100">
             <h4 className="text-xs font-bold text-slate-700 mb-3 block">مؤشر التحصيل المالي الإجمالي لكل فرع:</h4>
@@ -225,7 +226,7 @@ export default function DashboardView({
                     </div>
                     <div className="w-full h-2.5 bg-slate-200 rounded-full overflow-hidden">
                       <div 
-                        className="h-full bg-emerald-500 rounded-full transition-all duration-500"
+                        className="h-full bg-emerald-500 rounded-full transition-colors duration-500"
                         style={{ width: `${progressWidth}%` }}
                       ></div>
                     </div>
@@ -241,7 +242,7 @@ export default function DashboardView({
           <div className="flex items-center justify-between border-b border-slate-100 pb-3">
             <h3 className="text-sm font-black text-slate-800 flex items-center gap-2">
               <Activity className="w-4 h-4 text-slate-500" />
-              <span>أحدث عمليات وسجل الأنشطة الجارية</span>
+              <span>آخر الأنشطة</span>
             </h3>
             {activeRole === 'admin' && logs.length > 0 && (
               <button 
@@ -258,7 +259,7 @@ export default function DashboardView({
             <Filter className="w-3.5 h-3.5 text-slate-400" />
             <select 
               value={logFilter}
-              onChange={(e) => setLogFilter(e.target.value)}
+              aria-label="تصفية سجل الأنشطة" onChange={(e) => setLogFilter(e.target.value)}
               className="bg-transparent text-slate-700 font-bold focus:outline-none w-full"
             >
               <option value="">كل العمليات</option>

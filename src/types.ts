@@ -74,6 +74,7 @@ export interface CompanySettings {
 }
 
 export interface UserProfile {
+  isDeveloper?: boolean;
   uid: string;
   name: string;
   email: string;

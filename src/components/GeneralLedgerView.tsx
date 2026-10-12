@@ -1,3 +1,4 @@
+import { escapeHtml, printLogo } from '../utils/printSafety';
 import React, { useState, useEffect } from 'react';
 import { Payment, UserProfile, GeneralLedgerEntry } from '../types';
 import { 
@@ -268,7 +269,7 @@ export default function GeneralLedgerView({
 
   // Delete manual transaction
   const handleDeleteManualEntry = async (id: string, description: string, amount: number) => {
-    if (currentUser.role === 'viewer') {
+    if (currentUser.role !== 'admin') {
       alert('عذراً، رتبة المشاهد لا تملك صلاحية الحذف');
       return;
     }
@@ -294,7 +295,7 @@ export default function GeneralLedgerView({
   // Professional Printing Function for Monthly General Ledger Statement
   const handlePrintLedger = () => {
     const todayStr = new Date().toLocaleDateString('ar-SA', { day: 'numeric', month: 'long', year: 'numeric' });
-    const logoSource = logoBase64 ? `<img src="${logoBase64}" style="max-height:80px; max-width:200px; object-fit:contain; border-radius:10px;" />` : '';
+    const logoSource = printLogo(logoBase64);
 
     let running = currentMonthData.startingBalance;
     const printRows = currentMonthData.transactions.map((t, idx) => {
@@ -302,8 +303,8 @@ export default function GeneralLedgerView({
       return `
         <tr style="font-size: 11px; background-color: ${t.debit > 0 ? '#fffefd' : '#fdfdfd'};">
           <td style="border: 1px solid #cbd5e1; padding: 8px; text-align: center;">${idx + 1}</td>
-          <td style="border: 1px solid #cbd5e1; padding: 8px; text-align: center; font-family: monospace;">${t.date}</td>
-          <td style="border: 1px solid #cbd5e1; padding: 8px; text-align: right;">${t.bayan}</td>
+          <td style="border: 1px solid #cbd5e1; padding: 8px; text-align: center; font-family: monospace;">${escapeHtml(t.date)}</td>
+          <td style="border: 1px solid #cbd5e1; padding: 8px; text-align: right;">${escapeHtml(t.bayan)}</td>
           <td style="border: 1px solid #cbd5e1; padding: 8px; text-align: center; font-weight: bold; color: #b91c1c;">${t.debit > 0 ? t.debit.toLocaleString('ar-SA') : '-'}</td>
           <td style="border: 1px solid #cbd5e1; padding: 8px; text-align: center; font-weight: bold; color: #15803d;">${t.credit > 0 ? t.credit.toLocaleString('ar-SA') : '-'}</td>
           <td style="border: 1px solid #cbd5e1; padding: 8px; text-align: center; font-weight: bold; font-family: monospace;">${running.toLocaleString('ar-SA')} ريال</td>
@@ -413,7 +414,7 @@ export default function GeneralLedgerView({
           <div class="company-profile">
             ${logoSource}
             <div>
-              <div class="company-name">${companyName || 'نظام إدارة العمالة'}</div>
+              <div class="company-name">${escapeHtml(companyName || 'نظام إدارة العمالة')}</div>
               <div style="font-size:11px; color:#64748b;">دفتر الحسابات العام والتدفق النقدي</div>
             </div>
           </div>
@@ -480,7 +481,7 @@ export default function GeneralLedgerView({
         </table>
 
         <div class="footer-note">
-          كشف حساب معتمد ومطابق برمجياً مستخرج من منظومة إدارة العمالة. شركة ${companyName || 'المؤسسة'}.
+          كشف حساب معتمد ومطابق برمجياً مستخرج من منظومة إدارة العمالة. شركة ${escapeHtml(companyName || 'المؤسسة')}.
         </div>
 
         <script>
@@ -560,7 +561,7 @@ export default function GeneralLedgerView({
               <button
                 key={monthKey}
                 onClick={() => setSelectedMonth(monthKey)}
-                className={`flex-shrink-0 flex flex-col items-start px-4 py-2.5 rounded-xl border text-right transition-all cursor-pointer ${
+                className={`flex-shrink-0 flex flex-col items-start px-4 py-2.5 rounded-xl border text-right transition-colors cursor-pointer ${
                   isActive 
                     ? 'bg-[#002f56] text-white border-[#002f56] shadow-sm font-bold' 
                     : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
@@ -593,10 +594,10 @@ export default function GeneralLedgerView({
               </p>
             </div>
 
-            {currentUser.role === 'viewer' ? (
+            {currentUser.role !== 'admin' ? (
               <div className="p-4 bg-slate-50 border border-slate-200 text-slate-400 text-xs rounded-xl flex items-center gap-2 select-none">
                 <Lock className="w-4 h-4 text-slate-400" />
-                <span>المشاهد لا يمكنه إدخال قيود محاسبية</span>
+                <span>إدخال القيود المحاسبية متاح لمدير الشركة فقط</span>
               </div>
             ) : (
               <form onSubmit={handleSubmitManualEntry} className="space-y-4 text-xs">
@@ -607,7 +608,7 @@ export default function GeneralLedgerView({
                     <button
                       type="button"
                       onClick={() => setFormType('credit')}
-                      className={`py-2 px-3 rounded-lg border text-center transition-all font-bold ${
+                      className={`py-2 px-3 rounded-lg border text-center transition-colors font-bold ${
                         formType === 'credit'
                           ? 'bg-emerald-50 text-emerald-700 border-emerald-300 ring-2 ring-emerald-100'
                           : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
@@ -619,7 +620,7 @@ export default function GeneralLedgerView({
                     <button
                       type="button"
                       onClick={() => setFormType('debit')}
-                      className={`py-2 px-3 rounded-lg border text-center transition-all font-bold ${
+                      className={`py-2 px-3 rounded-lg border text-center transition-colors font-bold ${
                         formType === 'debit'
                           ? 'bg-rose-50 text-rose-700 border-rose-300 ring-2 ring-rose-100'
                           : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
@@ -676,7 +677,7 @@ export default function GeneralLedgerView({
                 <button
                   type="submit"
                   disabled={formIsSubmitting}
-                  className="w-full py-2.5 bg-[#002f56] hover:bg-[#00203d] text-white rounded-xl font-black transition-all shadow-md cursor-pointer flex items-center justify-center gap-1.5"
+                  className="w-full py-2.5 bg-[#002f56] hover:bg-[#00203d] text-white rounded-xl font-black transition-colors shadow-md cursor-pointer flex items-center justify-center gap-1.5"
                 >
                   <Plus className="w-4 h-4" />
                   <span>{formIsSubmitting ? 'جاري الحفظ...' : 'قيد الحركة المالية بالدفتر 📝'}</span>
@@ -702,7 +703,7 @@ export default function GeneralLedgerView({
 
               <button
                 onClick={handlePrintLedger}
-                className="px-3.5 py-1.5 bg-[#002f56] hover:bg-[#00203d] text-white rounded-xl text-xs font-black transition-all flex items-center gap-1 shadow-sm cursor-pointer"
+                className="px-3.5 py-1.5 bg-[#002f56] hover:bg-[#00203d] text-white rounded-xl text-xs font-black transition-colors flex items-center gap-1 shadow-sm cursor-pointer"
               >
                 <Printer className="w-4 h-4" />
                 <span>طباعة وتصدير الكشف</span>
@@ -789,10 +790,10 @@ export default function GeneralLedgerView({
                               <span className="px-2 py-0.5 bg-slate-100 text-slate-700 border border-slate-200 rounded text-[9px] font-bold">
                                 يدوي ✍️
                               </span>
-                              {currentUser.role !== 'viewer' && (
+                              {currentUser.role === 'admin' && (
                                 <button
                                   onClick={() => handleDeleteManualEntry(t.id, t.bayan, t.debit || t.credit)}
-                                  className="p-1 text-red-500 hover:bg-red-50 rounded transition-all cursor-pointer"
+                                  className="p-1 text-red-500 hover:bg-red-50 rounded transition-colors cursor-pointer"
                                   title="حذف هذا القيد المالي"
                                 >
                                   <Trash2 className="w-3 h-3" />
