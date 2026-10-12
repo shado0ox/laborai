@@ -108,3 +108,5 @@ Manual ledger entries can explicitly store `cash_effect=noncash`. These remain i
 ## Latest calculated kafala month
 
 The worker statement and print view show the latest calculated kafala month separately from the latest explicitly covered collection month. The calculated date uses the debt period endpoint. Legacy records are supported only when their description/notes contain an explicit end month and year, including Arabic year digits and the common alias ربيع ثاني. Start-month metadata is never guessed to be the endpoint. Generic balance settlements do not imply kafala collection coverage. Both labels recalculate from existing worker transactions, so removing a debt restores the previous latest endpoint. Validation: 30 automated tests and the desktop/mobile accounting browser flow passed. No balances or historical payment metadata are rewritten.
+
+For legacy records, a statement description edited locally is also read when deriving the display endpoint. This remains a browser-local statement annotation and does not rewrite the stored period or financial amounts. Structured debt periods take precedence over edited descriptions.

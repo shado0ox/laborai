@@ -74,7 +74,7 @@ export default function LedgerStatement({
   const ramadanPays = kafalaPays.filter(p => p.hijriMonth && parseInt(p.hijriMonth, 10) === 9);
 
   // Determine last paid month text
-  const lastCalculatedMonthText = lastCalculatedKafala(empPayments);
+  const lastCalculatedMonthText = lastCalculatedKafala(empPayments.map(payment => ({ ...payment, notes: !payment.kafalaPeriod && payment.id && localNotes[payment.id] !== undefined ? localNotes[payment.id] : payment.notes })));
   const lastPaidMonthText = lastPaidKafala(empPayments);
 
   // Pre-calculate estimate remaining months
