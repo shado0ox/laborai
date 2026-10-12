@@ -59,3 +59,23 @@ test('cashbook contains actual shop receipts and payments only and journal entri
   assert.equal(result.find(entry => entry.recordId === 'cash')!.account,'unassigned');
   assert.deepEqual(journalLines(result.find(entry => entry.recordId === 'paid')!), [{ account: 'ذمم مسؤولي المحلات', debit: 300, credit: 0 }, { account: 'البنك', debit: 0, credit: 300 }]);
 });
+
+
+test('cashbook reconciles source totals and carryforward using halalas without inventing zero', async () => {
+  const { cashbookSummary } = await import('../src/utils/accounting.ts');
+  const sample = { id:'a', recordId:'a', reference:'a', branch:'East', description:'test', category:'test', account:'cash' as const, counterpart:'test', source:'manual' as const };
+  const summary = cashbookSummary([
+    {...sample,date:'2026-01-01',receipt:0.1,payment:0},
+    {...sample,id:'b',date:'2026-02-01',receipt:0.2,payment:0.3},
+  ],'2026-02-01','2026-02-28');
+  assert.equal(summary.opening,0.1); assert.equal(summary.ending,0); assert.equal(summary.rows[0].balance,0);
+  assert.equal(summary.sources.find(row=>row.source==='manual')?.net,0);
+  assert.equal(cashbookSummary([{...sample,date:'2026-01-01',receipt:0,payment:81503}]).ending,-81503);
+});
+
+
+test('explicit non-cash manual adjustments remain stored but never enter cash or journal', () => {
+  const entries = [{ id:'noncash', date:'2026-01-01', bayan:'Approved waiver', debit:25, credit:0, cashEffect:'noncash' as const }, {id:'cash',date:'2026-01-01',bayan:'Actual receipt',debit:0,credit:25}];
+  const cash = cashTransactions([],entries,[]);
+  assert.equal(cash.length,1); assert.equal(cash[0].receipt,25); assert.equal(entries.length,2);
+});

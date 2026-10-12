@@ -103,6 +103,7 @@ CREATE TABLE IF NOT EXISTS general_ledger (
     reference VARCHAR(100),
     cash_account VARCHAR(10),
     counterpart_account VARCHAR(150),
+    cash_effect VARCHAR(10),
     debit DECIMAL(12, 2) DEFAULT 0.00,
     credit DECIMAL(12, 2) DEFAULT 0.00,
     tenant_id VARCHAR(128) NOT NULL DEFAULT '',

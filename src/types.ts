@@ -100,6 +100,7 @@ export interface ActivityLog {
 }
 
 export interface GeneralLedgerEntry {
+  cashEffect?: 'cash' | 'noncash';
   branch?: string;
   category?: string;
   reference?: string;

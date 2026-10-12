@@ -25,7 +25,7 @@ test('PostgreSQL-backed ownership, authentication and persistence', { timeout: 9
   await server.start();
   let logs = '';
   const process = spawn('node', ['dist/server.cjs'], {
-    env: { ...globalThis.process.env, NODE_ENV: 'production', PORT: String(appPort), DB_HOST: '127.0.0.1', DB_PORT: String(dbPort), DB_DATABASE: 'postgres', DB_USER: 'postgres', DB_PASSWORD: 'test', JWT_SECRET: 'integration-test-secret-only-0123456789', DEV_EMAIL: 'operator@example.test', DEV_DEFAULT_PASSWORD: password },
+    env: { ...globalThis.process.env, TZ: 'Asia/Riyadh', NODE_ENV: 'production', PORT: String(appPort), DB_HOST: '127.0.0.1', DB_PORT: String(dbPort), DB_DATABASE: 'postgres', DB_USER: 'postgres', DB_PASSWORD: 'test', JWT_SECRET: 'integration-test-secret-only-0123456789', DEV_EMAIL: 'operator@example.test', DEV_DEFAULT_PASSWORD: password },
     stdio: ['ignore', 'pipe', 'pipe']
   });
   process.stdout.on('data', data => { logs += data; }); process.stderr.on('data', data => { logs += data; });
@@ -167,11 +167,27 @@ test('PostgreSQL-backed ownership, authentication and persistence', { timeout: 9
     assert.equal((await api('/api/general-ledger', 'GET', undefined, branch.token)).some(item => item.id === entry.id),false);
     await api('/api/general-ledger', 'POST', { ...entry, id: 'invalid-branch', branch: 'Outside' }, adminA, 400);
   });
+  await t.test('manual non-cash metadata persists without altering its historical amounts', async () => {
+    const entry = { id:'waiver-ledger', date:'2026-10-01', bayan:'Approved non-cash adjustment', debit:25, credit:0, cashEffect:'noncash' };
+    await api('/api/general-ledger','POST',entry,adminA);
+    const saved = (await api('/api/general-ledger','GET',undefined,adminA)).find(row=>row.id===entry.id);
+    assert.equal(saved.cashEffect,'noncash'); assert.equal(saved.debit,25);
+    const {cashEffect,...legacyUpdate}=entry;
+    await api('/api/general-ledger','POST',legacyUpdate,adminA);
+    assert.equal((await api('/api/general-ledger','GET',undefined,adminA)).find(row=>row.id===entry.id).cashEffect,'noncash');
+  });
   await t.test('payment deletion persists and does not delete same ID in another tenant', async () => {
     await api('/api/payments/shared-payment', 'DELETE', undefined, viewer.token, 403);
     await api('/api/payments/shared-payment', 'DELETE', undefined, branch.token);
     assert.equal((await api('/api/payments', 'GET', undefined, adminA)).filter(p => p.transactionKind === 'receipt').length, 0);
     assert.ok((await api('/api/payments', 'GET', undefined, adminB)).some(payment => payment.id === 'shared-payment'));
+  });
+  await t.test('workspace reset requires owner role and fresh password confirmation', async () => {
+    const wipe = { password, confirmation: 'مسح بيانات مساحة العمل', backupConfirmed: true, targetTenantId: a.tenantId };
+    await api('/api/system/wipe', 'POST', wipe, branch.token, 403);
+    await api('/api/system/wipe', 'POST', wipe, viewer.token, 403);
+    await api('/api/system/wipe', 'POST', { ...wipe, password: 'wrong' }, adminA, 403);
+    assert.equal((await api('/api/employees', 'GET', undefined, adminA)).length, 2);
   });
   await t.test('role/status/deletion changes invalidate existing sessions', async () => {
     await api(`/api/users/${branch.uid}`, 'PUT', { role: 'viewer' }, adminA);
@@ -187,7 +203,13 @@ test('PostgreSQL-backed ownership, authentication and persistence', { timeout: 9
     await api('/api/logs', 'POST', { id: 'a-log', type: 'update', text: 'A activity', user: 'Forged author' }, adminA);
     assert.equal((await api('/api/logs', 'GET', undefined, adminA))[0].user, 'A');
     assert.equal((await api('/api/logs', 'GET', undefined, developer)).length, 0);
-    await api('/api/system/wipe', 'POST', undefined, developer);
+    await api('/api/system/wipe', 'POST', undefined, developer, 400);
+    const wipe = { password, confirmation: 'مسح بيانات مساحة العمل', backupConfirmed: true, targetTenantId: '' };
+    await api('/api/system/wipe', 'POST', { ...wipe, password: 'wrong' }, developer, 403);
+    await api('/api/system/wipe', 'POST', { ...wipe, targetTenantId: 'another-company' }, developer, 400);
+    await api('/api/system/wipe', 'POST', { ...wipe, backupConfirmed: false }, developer, 400);
+    await api('/api/system/wipe', 'POST', wipe, developer);
+    assert.equal((await api('/api/logs', 'GET', undefined, developer)).length, 1);
     assert.equal((await api('/api/employees', 'GET', undefined, adminA)).length, 2);
     assert.equal((await api('/api/employees', 'GET', undefined, developer)).length, 0);
   });
