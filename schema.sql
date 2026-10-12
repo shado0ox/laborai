@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS users (
 
 -- 2. جدول الموظفين (employees)
 CREATE TABLE IF NOT EXISTS employees (
-    iqama_no VARCHAR(15) PRIMARY KEY,
+    iqama_no VARCHAR(15) NOT NULL,
     name VARCHAR(255) NOT NULL,
     employee_id VARCHAR(50),
     iqama_expiry DATE NOT NULL,
@@ -30,12 +30,13 @@ CREATE TABLE IF NOT EXISTS employees (
     added_date VARCHAR(100),
     kafala_start_month VARCHAR(50),
     kafala_start_year VARCHAR(10),
-    tenant_id VARCHAR(128)
+    tenant_id VARCHAR(128) NOT NULL DEFAULT '',
+    PRIMARY KEY (tenant_id, iqama_no)
 );
 
 -- 3. جدول الدفعات (payments)
 CREATE TABLE IF NOT EXISTS payments (
-    id VARCHAR(128) PRIMARY KEY,
+    id VARCHAR(128) NOT NULL,
     iqama_no VARCHAR(15) NOT NULL,
     name VARCHAR(255) NOT NULL,
     branch VARCHAR(150) NOT NULL,
@@ -45,7 +46,8 @@ CREATE TABLE IF NOT EXISTS payments (
     notes TEXT,
     hijri_month VARCHAR(50),
     hijri_year VARCHAR(10),
-    tenant_id VARCHAR(128)
+    tenant_id VARCHAR(128) NOT NULL DEFAULT '',
+    PRIMARY KEY (tenant_id, id)
 );
 
 -- 4. جدول إعدادات التسعير (pricing_settings)
@@ -88,13 +90,14 @@ CREATE TABLE IF NOT EXISTS branches (
 
 -- 8. جدول دفتر الأستاذ العام (general_ledger)
 CREATE TABLE IF NOT EXISTS general_ledger (
-    id VARCHAR(128) PRIMARY KEY,
+    id VARCHAR(128) NOT NULL,
     date DATE NOT NULL,
     bayan TEXT NOT NULL,
     debit DECIMAL(12, 2) DEFAULT 0.00,
     credit DECIMAL(12, 2) DEFAULT 0.00,
-    tenant_id VARCHAR(128),
-    created_at VARCHAR(100)
+    tenant_id VARCHAR(128) NOT NULL DEFAULT '',
+    created_at VARCHAR(100),
+    PRIMARY KEY (tenant_id, id)
 );
 
 -- ملاحظة أمان: عمود password يجب أن يحتوي دائماً على قيمة مُشفّرة بـ bcrypt (تبدأ بـ $2a$ أو $2b$).

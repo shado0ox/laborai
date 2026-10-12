@@ -5,41 +5,60 @@ services:
     restart: always
     environment:
       POSTGRES_USER: ${DB_USER:-labor_admin}
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
       POSTGRES_DB: ${DB_DATABASE:-labor_management_db}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: labor_pgadmin
     restart: always
+    profiles: ["tools"]
     environment:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@company.com}
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:?يجب تحديد PGADMIN_DEFAULT_PASSWORD في ملف .env}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-}
     ports:
-      - "8085:80" # تم الإبقاء على البورت 8085 للدخول إلى لوحة تحكم قاعدة البيانات pgAdmin
+      - "127.0.0.1:8085:80"
     depends_on:
-      - postgres_db
+      postgres_db:
+        condition: service_healthy
 
   labor_app:
     build: .
     container_name: labor_app_container
     restart: always
     ports:
-      - "3150:3150"
+      - "127.0.0.1:3150:3150"
     env_file:
       - .env
     environment:
+      - NODE_ENV=production
       - PORT=3150
       - DB_HOST=postgres_db
       - DB_PORT=5432
       - DB_USER=${DB_USER:-labor_admin}
       - DB_DATABASE=${DB_DATABASE:-labor_management_db}
     depends_on:
-      - postgres_db
+      postgres_db:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3150/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
 
 volumes:
   postgres_data:

@@ -3,3 +3,12 @@ dist
 .git
 .env
 *.log
+
+.env.*
+*.sql
+tests
+docs
+.github
+.agents
+.codex
+coverage

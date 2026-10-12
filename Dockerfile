@@ -31,7 +31,9 @@ COPY package*.json ./
 RUN npm ci --omit=dev
 
 # Copy the compiled output from the builder stage
-COPY --from=builder /app/dist ./dist
+COPY --from=builder --chown=node:node /app/dist ./dist
+
+USER node
 
 # Expose port
 EXPOSE 3000
