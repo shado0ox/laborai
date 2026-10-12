@@ -91,3 +91,13 @@ Validation: `npm run check` passes 25 tests, including multi-year periods, bound
 ![Independent shop accounts](screenshots/shops-desktop.png)
 
 ![Cashbook](screenshots/cashbook-desktop.png)
+
+## Cashbook reconciliation and guarded workspace reset
+
+The cashbook now shows a collapsible reconciliation by employee receipts, manual vouchers and shop cash movements. Totals include carryforward and observe the selected filters. Integer halalas keep running balances and source totals consistent. Negative cash balances are retained for reconciliation; they are not silently clamped to zero or “balanced” with invented entries. A cashbook closing balance differs from the debit/credit difference in the journal view. Production data remains unchanged.
+
+PostgreSQL `DATE` values are read as calendar strings, preserving their stored date in Asia/Riyadh and other server timezones. This fixes one-day shifts and identical shop retries that were rejected when the server timezone was ahead of UTC. The integration suite explicitly uses Asia/Riyadh.
+
+Workspace reset is available only in Settings. The duplicate sidebar reset path and its implicit company/pricing resets were removed. An administrator must enter their current password, type the exact confirmation phrase and acknowledge a restorable backup. The API checks all fields, the target tenant and bcrypt password, limits attempts per account and records the reset audit entry in the same database transaction. Users and company/pricing settings are preserved; workers, payments, cashbook, shop movements and branch records are cleared only in the authorized workspace. The browser acknowledgment does not independently verify the existence or restorability of a database backup.
+
+Validation: 27 automated tests passed, including non-admin rejection, invalid confirmation/password/backup rejection, tenant isolation and transactional reset audit. `tests/wipe_browser.py` passed against disposable sandbox data, including disabled submission until all confirmations, wrong-password data preservation, successful reset and preserved company settings. No production reset was performed.

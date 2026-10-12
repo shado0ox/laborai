@@ -78,3 +78,22 @@ export function shopStatement(entries: ShopEntry[], branch: string, from = '', t
   });
   return { opening, rows, ending: balance, charges: rows.reduce((sum, entry) => sum + entry.debit, 0), receipts: rows.filter(entry => entry.kind === 'receipt').reduce((sum, entry) => sum + entry.amount, 0), credits: rows.reduce((sum, entry) => sum + entry.credit, 0) };
 }
+
+/** Integer halalas keep carryforward and per-source reconciliation consistent. */
+export function cashbookSummary(transactions: CashTransaction[], from = '', to = '') {
+  const cents = (value: number) => Math.round(Number(value || 0) * 100);
+  const previous = transactions.filter(row => from && row.date < from && (!to || row.date <= to));
+  const period = transactions.filter(row => (!from || row.date >= from) && (!to || row.date <= to));
+  const net = (rows: CashTransaction[]) => rows.reduce((sum,row) => sum + cents(row.receipt) - cents(row.payment),0);
+  const openingCents = net(previous);
+  let running = openingCents;
+  const rows = period.map(row => { running += cents(row.receipt)-cents(row.payment); return { ...row, balance: running/100 }; });
+  const received = period.reduce((sum,row)=>sum+cents(row.receipt),0)/100;
+  const paid = period.reduce((sum,row)=>sum+cents(row.payment),0)/100;
+  const sources = (['employee','manual','shop'] as const).map(source => {
+    const sourceRows = [...previous,...period].filter(row=>row.source===source);
+    return { source, count: sourceRows.length, received: sourceRows.reduce((sum,row)=>sum+cents(row.receipt),0)/100,
+      paid: sourceRows.reduce((sum,row)=>sum+cents(row.payment),0)/100, net: net(sourceRows)/100 };
+  });
+  return { opening:openingCents/100, rows, received, paid, net:net(period)/100, ending:running/100, sources };
+}

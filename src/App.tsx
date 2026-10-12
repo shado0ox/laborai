@@ -1,3 +1,4 @@
+import WorkspaceWipeDialog from './components/WorkspaceWipeDialog';
 import { employeeDues } from './utils/accounting';
 import { isEmployeeCredit } from './utils/paymentKind';
 import React, { useState, useEffect } from 'react';
@@ -59,6 +60,7 @@ export default function App() {
   });
   const [authToken, setAuthToken] = useState<string | null>(() => sessionStorage.getItem('authToken') || null);
 
+  const [wipeOpen, setWipeOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [connectionError, setConnectionError] = useState('');
   const [newUserPassword, setNewUserPassword] = useState('');
@@ -620,44 +622,17 @@ export default function App() {
     }
   };
 
-  const handleWipeAllData = async () => {
-    if (confirm("⚠️ تحذير مدمر محاسبي نهائي!\n\nهل أنت متأكد تماماً من رغبتك في حذف وإفراغ كافة بيانات العمالة، والقيود المالية، والدفعات، وسجلات الحركة بالكامل؟\nهذا الإجراء لا يمكن التراجع عنه أبداً وسيتم حذفها من قاعدة البيانات.")) {
-      try {
-        const tid = currentUser?.tenantId || '';
-        const wipeRes = await authFetch(`/api/system/wipe?tenantId=${tid}`, {
-          method: 'POST'
-        });
-        if (!wipeRes.ok) {
-          const errData = await wipeRes.json().catch(() => ({}));
-          throw new Error(errData.error || `فشل التصفير (HTTP ${wipeRes.status})`);
-        }
-        
-        setEmployees([]);
-        setPayments([]);
-        
-        const newInitLog = {
-          id: `log_init_${Date.now()}`,
-          type: 'update' as const,
-          text: 'تم تصفير وإفراغ قاعدة البيانات بنجاح وبدء سجل نشاط جديد.',
-          user: currentUser?.name || 'النظام',
-          time: new Date().toISOString().slice(0, 19).replace('T', ' ')
-        };
-        
-        const logRes = await authFetch(`/api/logs?tenantId=${tid}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(newInitLog)
-        });
-        if (logRes.ok) {
-          setLogs([newInitLog]);
-        }
-        
-        alert("🎉 تم تهيئة النظام ومسح كافة البيانات بنجاح!");
-      } catch (err: any) {
-        console.error('API wipe error:', err);
-        alert(`⚠️ لم يتم تصفير قاعدة البيانات بالكامل: ${err.message || 'تعذر الاتصال بالخادم'}`);
-      }
-    }
+  const handleWipeAllData = async (body: { password: string; confirmation: string; backupConfirmed: boolean }) => {
+    if (currentUser?.role !== 'admin' || activeTab !== 'settings') throw new Error('المسح متاح لمدير مساحة العمل من الإعدادات فقط.');
+    const tid = currentUser.tenantId || '';
+    const response = await authFetch(`/api/system/wipe?tenantId=${encodeURIComponent(tid)}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, targetTenantId: tid })
+    });
+    if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(data.error || 'لم يتم مسح البيانات.'); }
+    setEmployees([]); setPayments([]); setBranches([]); setSelectedStatementEmp(null); setWipeOpen(false);
+    const logsResponse = await authFetch(`/api/logs?tenantId=${encodeURIComponent(tid)}`);
+    if (logsResponse.ok) setLogs(await logsResponse.json());
+    toastNotice('تم مسح بيانات مساحة العمل. بقيت حسابات المستخدمين وإعدادات الشركة.');
   };
 
   const handleUpdateEmployee = async (updatedEmp: Employee) => {
@@ -791,59 +766,6 @@ export default function App() {
     } catch (err: any) {
       console.error('API clear logs error:', err);
       alert(`⚠️ لم يتم مسح السجلات من قاعدة البيانات: ${err.message || 'تعذر الاتصال بالخادم'}`);
-    }
-  };
-
-  // Reset data to blank states on DB
-  const handleResetData = async () => {
-    const tid = currentUser?.tenantId || '';
-    try {
-      const wipeRes = await authFetch(`/api/system/wipe?tenantId=${tid}`, {
-        method: 'POST'
-      });
-      if (!wipeRes.ok) {
-        const errData = await wipeRes.json().catch(() => ({}));
-        throw new Error(errData.error || `فشل التصفير (HTTP ${wipeRes.status})`);
-      }
-      setEmployees([]);
-      setPayments([]);
-      
-      const initialBrs: string[] = [];
-      const branchesRes = await authFetch(`/api/branches?tenantId=${tid}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(initialBrs)
-      });
-      if (branchesRes.ok) setBranches(initialBrs);
-      
-      const logsRes = await authFetch(`/api/logs?tenantId=${tid}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: crypto.randomUUID(), type: 'update', text: 'تم مسح بيانات مساحة العمل.', user: currentUser.name, time: new Date().toISOString() })
-      });
-      if (logsRes.ok) setLogs([]);
-      
-      const defaultCompanyObj = { name: tid ? `لوحة حسابات ومساحة ${currentUser.name}` : 'برنامج إدارة العمالة المهنية' };
-      const defaultPricingObj = { kafala: 250, iqama3: 3550, iqama6: 7100, iqama12: 14200, ramadanFree: true };
-      
-      const compRes = await authFetch(`/api/company-settings?tenantId=${tid}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(defaultCompanyObj)
-      });
-      if (compRes.ok) setCompanySettings(defaultCompanyObj);
-      
-      const pricRes = await authFetch(`/api/pricing-settings?tenantId=${tid}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(defaultPricingObj)
-      });
-      if (pricRes.ok) setPricingSettings(defaultPricingObj);
-      
-      toastNotice('تم تصفير وإعادة تعيين قاعدة البيانات بنجاح!');
-    } catch (err: any) {
-      console.error('API reset data error:', err);
-      toastNotice(`⚠️ لم تكتمل عملية إعادة التعيين بالكامل: ${err.message || 'تعذر الاتصال بالخادم'}`);
     }
   };
 
@@ -1129,6 +1051,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex bg-[#f4f7fc]">
+      {wipeOpen && activeTab === 'settings' && currentUser.role === 'admin' && <WorkspaceWipeDialog companyName={companySettings.name} onClose={() => setWipeOpen(false)} onConfirm={handleWipeAllData} />}
       
       {/* 1. Responsive Sidebar Navigation */}
       <SidebarMenu 
@@ -1140,7 +1063,6 @@ export default function App() {
           setSelectedStatementEmp(null);
         }}
         currentUser={currentUser}
-        onResetData={handleResetData}
         totalEmployeesCount={employees.filter(e => e.status === 'active').length}
         totalAlertsCount={getAlertTotalsCounts()}
         isSidebarOpen={isSidebarOpen}
@@ -1791,16 +1713,16 @@ export default function App() {
                         <div className="text-xs font-bold text-slate-700 space-y-1 text-right">
                           <div className="text-rose-900 font-extrabold text-xs">⚠️ سيؤدي هذا الإجراء فوراً إلى حذف:</div>
                           <ul className="list-disc list-inside text-[11px] text-slate-550 font-normal space-y-1">
-                            <li>جميع عمالة المؤسسة النشطة والأرشيفية المسجلة بالمتصفح.</li>
-                            <li>سجلات الدفعات ووصولات السداد وقيود كشف الحساب المالية بالكامل.</li>
+                            <li>جميع عمالة المؤسسة النشطة والأرشيفية في قاعدة البيانات.</li>
+                            <li>سجلات الدفعات وقيود النقدية وحسابات المحلات والفروع.</li>
                             <li>سجل النشاط وحركات المستخدمين المنفذة مسبقاً.</li>
                           </ul>
                         </div>
                         <button 
-                          onClick={handleWipeAllData}
+                          onClick={() => setWipeOpen(true)}
                           className="px-6 py-3 bg-red-600 text-white rounded-xl text-xs font-black hover:bg-red-700 shadow-md cursor-pointer transition-colors whitespace-nowrap"
                         >
-                          ⚠️ امسح وعيّن ليدجر عمالة فارغ وجديد
+                          مسح بيانات مساحة العمل
                         </button>
                       </div>
                     </div>

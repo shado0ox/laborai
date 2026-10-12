@@ -12,6 +12,9 @@ import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
 
+// PostgreSQL DATE is a calendar date, not a timezone-dependent instant.
+pg.types.setTypeParser(1082, value => value);
+
 dotenv.config();
 
 // Generates a strong random password/secret when no explicit value is provided via env.
@@ -1280,7 +1283,7 @@ app.get("/api/employees", requireAuth, async (req: any, res: any) => {
         iqamaNo: r.iqama_no,
         name: r.name,
         employeeId: r.employee_id || undefined,
-        iqamaExpiry: r.iqama_expiry ? r.iqama_expiry.toISOString().slice(0, 10) : "",
+        iqamaExpiry: r.iqama_expiry ? String(r.iqama_expiry).slice(0, 10) : "",
         mobile: r.mobile || "",
         branch: r.branch,
         iqamaBalance: Number(r.iqama_balance || 0),
@@ -1424,7 +1427,7 @@ app.get("/api/payments", requireAuth, async (req: any, res: any) => {
         transactionKind: getPaymentKind({ type: r.type, transactionKind: r.transaction_kind }),
         category: r.category || undefined, balanceIncluded: r.balance_included ?? true,
         kafalaPeriod: r.kafala_period || undefined, cashAccount: r.cash_account || undefined,
-        date: r.date ? r.date.toISOString().slice(0, 10) : "",
+        date: r.date ? String(r.date).slice(0, 10) : "",
         notes: r.notes || undefined,
         hijriMonth: r.hijri_month || undefined,
         hijriYear: r.hijri_year || undefined,
@@ -1956,7 +1959,9 @@ app.delete("/api/logs", requireAuth, requireAdmin, async (req: any, res: any) =>
 });
 
 // 8. General Wipe/Reset database API
-app.post("/api/system/wipe", requireAuth, async (req: any, res: any) => {
+const wipeLimiter = rateLimit({ keyGenerator: (req: any) => `wipe:${req.user.uid}`, windowMs: 15 * 60 * 1000, limit: 5, standardHeaders: true, legacyHeaders: false,
+  message: { error: 'تجاوزت محاولات تأكيد المسح. أعد المحاولة بعد 15 دقيقة.' } });
+app.post("/api/system/wipe", requireAuth, wipeLimiter, async (req: any, res: any) => {
   const tenantId = getTenantId(req);
   
   // Authorization checks
@@ -1966,13 +1971,19 @@ app.post("/api/system/wipe", requireAuth, async (req: any, res: any) => {
       return res.status(403).json({ error: "غير مسموح بمسح بيانات مساحة العمل هذه إلا لمديرها." });
     }
   } else {
-    // Only the main developer is allowed to wipe the entire database
+    // Only the developer may wipe the default workspace; other tenants remain intact.
     if (req.user.email !== DEV_EMAIL) {
-      return res.status(403).json({ error: "غير مسموح بمسح كامل قاعدة بيانات السيرفر إلا لمطور النظام." });
+      return res.status(403).json({ error: "غير مسموح بمسح المساحة الافتراضية إلا لمطور النظام." });
     }
   }
 
+  const confirmation = z.object({ password: z.string().min(1).max(200),
+    confirmation: z.literal('مسح بيانات مساحة العمل'), backupConfirmed: z.literal(true), targetTenantId: z.string() }).safeParse(req.body);
+  if (!confirmation.success || confirmation.data.targetTenantId !== tenantId) return res.status(400).json({ error: 'أكمل تأكيد اسم العملية والنسخة الاحتياطية ومساحة العمل.' });
   try {
+    const actor = pool ? (await runQuery('SELECT password FROM users WHERE uid = ?', [req.user.uid]))[0] : fallbackUsers.find(u => u.uid === req.user.uid);
+    if (!actor?.password || !await bcrypt.compare(confirmation.data.password, actor.password)) return res.status(403).json({ error: 'كلمة مرور حسابك الحالي غير صحيحة. لم تُمسح البيانات.' });
+    const wipeLog = { id: crypto.randomUUID(), type: 'update', text: 'تم مسح بيانات مساحة العمل بعد تأكيد المدير وكلمة مروره.', user: req.user.name, time: new Date().toISOString(), tenantId };
     if (pool) {
       const client = await pool.connect();
       try {
@@ -1980,6 +1991,7 @@ app.post("/api/system/wipe", requireAuth, async (req: any, res: any) => {
         for (const table of ["payments", "employees", "activity_logs", "general_ledger", "shop_entries", "branches"]) {
           await client.query(`DELETE FROM ${table} WHERE COALESCE(tenant_id, '') = $1`, [tenantId]);
         }
+        await client.query('INSERT INTO activity_logs (id, type, text, "user", time, tenant_id) VALUES ($1,$2,$3,$4,$5,$6)', [wipeLog.id, wipeLog.type, wipeLog.text, wipeLog.user, wipeLog.time, tenantId]);
         await client.query("COMMIT");
       } catch (error) { await client.query("ROLLBACK"); throw error; }
       finally { client.release(); }
@@ -2000,6 +2012,7 @@ app.post("/api/system/wipe", requireAuth, async (req: any, res: any) => {
         fallbackShopEntries = fallbackShopEntries.filter(e => !!e.tenantId);
         fallbackBranches.delete("");
       }
+      fallbackLogs.push(wipeLog);
       return res.json({ success: true });
     }
   } catch (err: any) {

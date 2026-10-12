@@ -13,7 +13,6 @@ interface SidebarMenuProps {
   activeTab: string;
   setActiveTab: (tab: string) => void;
   currentUser: UserProfile;
-  onResetData: () => void;
   totalEmployeesCount: number;
   totalAlertsCount: number;
   isSidebarOpen: boolean;
@@ -29,7 +28,6 @@ export default function SidebarMenu({
   activeTab,
   setActiveTab,
   currentUser,
-  onResetData,
   totalEmployeesCount,
   totalAlertsCount,
   isSidebarOpen,
@@ -202,16 +200,7 @@ export default function SidebarMenu({
 
         {/* Fixed Footer Reset/Demonstration area */}
         <div className="p-4 border-t border-slate-800/80 bg-slate-950/30 text-center gap-1.5 flex flex-col">
-          {currentUser.role === 'admin' && <button
-            onClick={() => {
-              if (confirm('هل تريد إعادة تعيين كافة البيانات إلى الحالة الافتراضية؟ سيتم إزالة التعديلات والمدفوعات الجديدة.')) {
-                onResetData();
-              }
-            }}
-            className="w-full text-[10px] bg-red-950/40 text-red-400 border border-red-900/40 hover:bg-red-950/80 hover:text-red-300 py-1.5 px-2 rounded-lg font-bold transition-colors cursor-pointer"
-          >
-            مسح بيانات مساحة العمل
-          </button>}
+
           
           <div className="text-[9px] text-slate-500 leading-normal mt-1">
             تصميم وبرمجة المهندس <strong>Shady Nassef</strong><br />

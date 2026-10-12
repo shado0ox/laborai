@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Payment, UserProfile, GeneralLedgerEntry, ShopEntry } from '../types';
-import { cashTransactions, journalLines, CashTransaction } from '../utils/accounting';
+import { cashTransactions, journalLines, CashTransaction, cashbookSummary } from '../utils/accounting';
 import { exportCSV, financeFetch, money, printFinance } from '../utils/financeIO';
 
 interface Props { payments: Payment[]; currentUser: UserProfile; companyName: string; logoBase64?: string; branches: string[] }
@@ -33,10 +33,8 @@ export default function GeneralLedgerView({ payments, currentUser, companyName, 
   useEffect(() => { void load(); }, [currentUser.tenantId]);
   const all = useMemo(() => cashTransactions(payments, manual, shops), [payments, manual, shops]);
   const base = all.filter(transaction => (!branch || transaction.branch === branch) && (!account || transaction.account === account) && (!source || transaction.source === source) && (!search || `${transaction.reference} ${transaction.description} ${transaction.category}`.toLowerCase().includes(search.toLowerCase())));
-  const opening = base.filter(transaction => from && transaction.date < from).reduce((total, transaction) => total + transaction.receipt - transaction.payment, 0);
-  let balance = opening;
-  const rows = base.filter(transaction => (!from || transaction.date >= from) && (!to || transaction.date <= to)).map(transaction => { balance += transaction.receipt - transaction.payment; return { ...transaction, balance }; });
-  const totalReceived = rows.reduce((sum, transaction) => sum + transaction.receipt, 0), totalPaid = rows.reduce((sum, transaction) => sum + transaction.payment, 0);
+  const reconciliation = cashbookSummary(base, from, to);
+  const { opening, rows, ending: balance, received: totalReceived, paid: totalPaid } = reconciliation;
   const summaries: [string,number][] = [['رصيد افتتاحي', opening], ['مقبوضات الفترة', totalReceived], ['مدفوعات الفترة', totalPaid], ['صافي الحركة', totalReceived-totalPaid], ['رصيد ختامي', balance]];
   const journal = rows.flatMap(transaction => journalLines(transaction).map(line => ({ ...line, transaction })));
   const journalDebit = journal.reduce((sum,line) => sum + line.debit,0), journalCredit = journal.reduce((sum,line) => sum + line.credit,0);
@@ -73,6 +71,13 @@ export default function GeneralLedgerView({ payments, currentUser, companyName, 
       <label className="text-sm sm:col-span-2">بحث بالمرجع أو البيان<input aria-label="البحث في دفتر النقدية" className="field" type="search" value={search} onChange={event => setSearch(event.target.value)} /></label>
       <button className="finance-button self-end" onClick={() => { setFrom(''); setTo(''); setSearch(''); }}>كل الفترات</button>
     </div>
+    <details className="accounting-panel">
+      <summary className="cursor-pointer font-bold">مطابقة الرصيد المحسوب حسب المصدر</summary>
+      <p className="text-sm text-slate-600 my-3">الرصيد المحسوب = الرصيد السابق للفترة + المقبوضات − المدفوعات. هذا الناتج من الحركات المسجلة، ولا يثبت رصيد البنك أو الصندوق الفعلي. تشمل المجاميع التالية الحركات السابقة والفترة المحددة مع فلاتر الفرع والحساب والمصدر.</p>
+      <div className="overflow-x-auto"><table className="accounting-table"><thead><tr><th>المصدر</th><th>عدد الحركات</th><th>المقبوضات</th><th>المدفوعات</th><th>الأثر في الرصيد</th></tr></thead><tbody>{reconciliation.sources.map(row=><tr key={row.source}><td>{row.source==='employee'?'تحصيلات العمالة':row.source==='manual'?'السندات اليدوية':'حسابات المحلات'}</td><td>{row.count}</td><td>{money(row.received)}</td><td>{money(row.paid)}</td><td>{money(row.net)}</td></tr>)}</tbody></table></div>
+      <p className="text-sm mt-3">{money(opening)} + {money(totalReceived)} − {money(totalPaid)} = {money(balance)} ريال</p>
+      {balance < 0 && <p className="mt-3 text-sm text-amber-900">الرصيد المحسوب سالب. راجع سندات الصرف والتحصيل والرصيد الافتتاحي؛ لا تنشئ سندًا لتصفير الفرق قبل مطابقة الحركات.</p>}
+    </details>
     {formOpen && <form onSubmit={save} className="accounting-panel space-y-4" aria-busy={busy}>
       <h3 className="font-bold text-lg">سند نقدية جديد</h3>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">

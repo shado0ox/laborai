@@ -25,7 +25,7 @@ test('PostgreSQL-backed ownership, authentication and persistence', { timeout: 9
   await server.start();
   let logs = '';
   const process = spawn('node', ['dist/server.cjs'], {
-    env: { ...globalThis.process.env, NODE_ENV: 'production', PORT: String(appPort), DB_HOST: '127.0.0.1', DB_PORT: String(dbPort), DB_DATABASE: 'postgres', DB_USER: 'postgres', DB_PASSWORD: 'test', JWT_SECRET: 'integration-test-secret-only-0123456789', DEV_EMAIL: 'operator@example.test', DEV_DEFAULT_PASSWORD: password },
+    env: { ...globalThis.process.env, TZ: 'Asia/Riyadh', NODE_ENV: 'production', PORT: String(appPort), DB_HOST: '127.0.0.1', DB_PORT: String(dbPort), DB_DATABASE: 'postgres', DB_USER: 'postgres', DB_PASSWORD: 'test', JWT_SECRET: 'integration-test-secret-only-0123456789', DEV_EMAIL: 'operator@example.test', DEV_DEFAULT_PASSWORD: password },
     stdio: ['ignore', 'pipe', 'pipe']
   });
   process.stdout.on('data', data => { logs += data; }); process.stderr.on('data', data => { logs += data; });
@@ -173,6 +173,13 @@ test('PostgreSQL-backed ownership, authentication and persistence', { timeout: 9
     assert.equal((await api('/api/payments', 'GET', undefined, adminA)).filter(p => p.transactionKind === 'receipt').length, 0);
     assert.ok((await api('/api/payments', 'GET', undefined, adminB)).some(payment => payment.id === 'shared-payment'));
   });
+  await t.test('workspace reset requires owner role and fresh password confirmation', async () => {
+    const wipe = { password, confirmation: 'مسح بيانات مساحة العمل', backupConfirmed: true, targetTenantId: a.tenantId };
+    await api('/api/system/wipe', 'POST', wipe, branch.token, 403);
+    await api('/api/system/wipe', 'POST', wipe, viewer.token, 403);
+    await api('/api/system/wipe', 'POST', { ...wipe, password: 'wrong' }, adminA, 403);
+    assert.equal((await api('/api/employees', 'GET', undefined, adminA)).length, 2);
+  });
   await t.test('role/status/deletion changes invalidate existing sessions', async () => {
     await api(`/api/users/${branch.uid}`, 'PUT', { role: 'viewer' }, adminA);
     await api('/api/employees', 'GET', undefined, branch.token, 401);
@@ -187,7 +194,13 @@ test('PostgreSQL-backed ownership, authentication and persistence', { timeout: 9
     await api('/api/logs', 'POST', { id: 'a-log', type: 'update', text: 'A activity', user: 'Forged author' }, adminA);
     assert.equal((await api('/api/logs', 'GET', undefined, adminA))[0].user, 'A');
     assert.equal((await api('/api/logs', 'GET', undefined, developer)).length, 0);
-    await api('/api/system/wipe', 'POST', undefined, developer);
+    await api('/api/system/wipe', 'POST', undefined, developer, 400);
+    const wipe = { password, confirmation: 'مسح بيانات مساحة العمل', backupConfirmed: true, targetTenantId: '' };
+    await api('/api/system/wipe', 'POST', { ...wipe, password: 'wrong' }, developer, 403);
+    await api('/api/system/wipe', 'POST', { ...wipe, targetTenantId: 'another-company' }, developer, 400);
+    await api('/api/system/wipe', 'POST', { ...wipe, backupConfirmed: false }, developer, 400);
+    await api('/api/system/wipe', 'POST', wipe, developer);
+    assert.equal((await api('/api/logs', 'GET', undefined, developer)).length, 1);
     assert.equal((await api('/api/employees', 'GET', undefined, adminA)).length, 2);
     assert.equal((await api('/api/employees', 'GET', undefined, developer)).length, 0);
   });
