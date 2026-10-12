@@ -107,7 +107,7 @@ export default function PortalDevPanelView({
         <div className="bg-[#0f1d30] border border-slate-800 text-white p-5 rounded-2xl shadow-md flex items-center justify-between col-span-1 lg:col-span-2">
           <div className="space-y-2">
             <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 "></span>
               <span className="text-[10px] text-emerald-450 uppercase font-extrabold tracking-widest">خادم البرنامج نشط</span>
             </div>
             <h3 className="text-sm font-black text-slate-100">بوابة الإشراف والمطور الرئيسي</h3>

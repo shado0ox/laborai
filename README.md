@@ -28,7 +28,7 @@
 - 🔒 تسجيل عام مقتصر على تسجيل **شركة جديدة (مساحة خاصة مستقلة)**؛ أما إضافة أعضاء/مسؤولي الفروع فتتم **فقط** من داخل لوحة تحكم مدير الشركة
 - 💰 دفتر أستاذ عام (General Ledger) وتتبع مدفوعات العمالة
 - 📊 لوحة موافقات ومساحات اشتراك خاصة بمطور النظام
-- 🐘 قاعدة بيانات PostgreSQL (مع نسخة احتياطية داخل الذاكرة كـ fallback عند تعذر الاتصال)
+- 🐘 قاعدة بيانات PostgreSQL إلزامية في الإنتاج؛ التخزين المؤقت للتجارب المحلية فقط
 - 🐳 جاهز للتشغيل بالكامل عبر Docker / Docker Compose
 
 ---
@@ -52,7 +52,7 @@ The system is **multi-tenant** by design: every company that signs up gets its o
 - 🔒 Public self-registration is limited to **new company sign-up (a fresh private tenant space)**; branch members/managers can **only** be added by the company admin from inside the dashboard
 - 💰 General ledger and worker payment tracking
 - 📊 Developer approvals panel and subscriber-space management
-- 🐘 PostgreSQL-backed (with an in-memory fallback store if the DB is unreachable)
+- 🐘 PostgreSQL required in production; optional disposable memory fallback for local development only
 - 🐳 Fully containerized with Docker / Docker Compose
 
 ---
@@ -63,10 +63,9 @@ The system is **multi-tenant** by design: every company that signs up gets its o
 |---|---|
 | Frontend | React 19, TypeScript, Vite, Tailwind CSS |
 | Backend | Node.js, Express, TypeScript |
-| Database | PostgreSQL (`pg`), MySQL driver available (`mysql2`) |
+| Database | PostgreSQL (`pg`), required in production |
 | Auth | JWT (`jsonwebtoken`), bcrypt password hashing (`bcryptjs`) |
 | Security | Helmet, `express-rate-limit`, Zod schema validation |
-| AI | Google Gemini (`@google/genai`) |
 | Other | XLSX export (`xlsx`), Framer Motion (`motion`) |
 
 ---
@@ -129,7 +128,7 @@ docker compose logs -f labor_app
 ```
 
 الخدمات التي سيتم تشغيلها:
-Services started:
+Services started (pgAdmin requires the `tools` profile; all ports bind to localhost):
 
 | الخدمة / Service | Container Name | Port |
 |---|---|---|
@@ -204,3 +203,13 @@ laborai/
 مشروع خاص بشادي ناصف.
 Private project — owned by Shady Nassef.
 
+
+
+## التحقق وبيئة التجربة
+
+```bash
+npm run check   # TypeScript + build + security regression tests
+npm run sandbox # Disposable, isolated test data at http://127.0.0.1:3151
+```
+
+بيئة التجربة لا تستخدم قاعدة الإنتاج. تفاصيل الإصلاحات وترحيل المفاتيح وحدود التحقق وخطوات النشر في [review-and-deployment.md](docs/review-and-deployment.md).

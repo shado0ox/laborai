@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { 
   BarChart3, Users, AlertTriangle, Coins, CalendarDays, 
   Archive, Settings, HelpCircle, LogOut, ShieldAlert, Building, ShieldCheck,
@@ -39,6 +39,14 @@ export default function SidebarMenu({
   allowLedgerForUsers = false
 }: SidebarMenuProps) {
   
+  const [desktop, setDesktop] = useState(() => window.matchMedia('(min-width: 1024px)').matches);
+  useEffect(() => {
+    const media = window.matchMedia('(min-width: 1024px)');
+    const update = () => setDesktop(media.matches);
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
+
   const guestRoleLabels = {
     admin: 'مدير النظام (كامل الصلاحيات)',
     branch: `مسؤول فرع (${currentUser.branch || 'جدة'})`,
@@ -51,7 +59,7 @@ export default function SidebarMenu({
     { id: 'dashboard', label: 'لوحة المتابعة', icon: <BarChart3 className="w-5 h-5" />, section: 'الرئيسية' },
     { 
       id: 'employees', 
-      label: 'الموظفون العمالة', 
+      label: 'ملفات العمالة',
       icon: <Users className="w-5 h-5" />, 
       badge: totalEmployeesCount,
       section: 'الرئيسية' 
@@ -61,29 +69,30 @@ export default function SidebarMenu({
       label: 'التنبيهات العاجلة', 
       icon: <AlertTriangle className="w-5 h-5" />, 
       badge: totalAlertsCount,
-      badgeColor: 'bg-red-500 text-white animate-pulse',
+      badgeColor: 'bg-red-500 text-white ',
       section: 'الرئيسية' 
     },
-    { id: 'payments', label: 'سجل المقبوضات والمدفوعات', icon: <Coins className="w-5 h-5" />, section: 'المالية' },
+    { id: 'payments', label: 'المدفوعات والتحصيلات', icon: <Coins className="w-5 h-5" />, section: 'المالية' },
     ...(showLedger ? [{ id: 'general_ledger', label: 'كشف الوارد والصادر العام', icon: <ArrowLeftRight className="w-5 h-5" />, section: 'المالية' }] : []),
+    ...(currentUser.role !== 'viewer' || allowLedgerForUsers ? [{ id: 'shop_accounts', label: 'حسابات المحلات والفروع', icon: <Building className="w-5 h-5" />, section: 'المالية' }] : []),
     { id: 'monthly', label: 'التقرير الهجري المالي', icon: <CalendarDays className="w-5 h-5" />, section: 'المالية' },
     { id: 'archive', label: 'الأرشيف والمستبعدين', icon: <Archive className="w-5 h-5" />, section: 'قواعد البيانات' },
-    { id: 'settings', label: 'هوية الشركة والأسعار', icon: <Settings className="w-5 h-5" />, section: 'الإدارة العامة' }
+    { id: 'settings', label: 'إعدادات الشركة', icon: <Settings className="w-5 h-5" />, section: 'الإدارة العامة' }
   ];
 
-  const navItems = currentUser.email === 'shady.nasif@gmail.com' ? [
+  const navItems = currentUser.isDeveloper ? [
     { id: 'dev_panel', label: 'لوحة مطور النظام', icon: <BarChart3 className="w-5 h-5" />, section: 'لوحة التحكم للمطور' },
     { 
       id: 'approvals', 
       label: 'طلبات التسجيل بالبوابة', 
       icon: <ShieldCheck className="w-5 h-5" />, 
       badge: pendingUsersCount,
-      badgeColor: 'bg-amber-500 text-white animate-pulse',
+      badgeColor: 'bg-amber-500 text-white ',
       section: 'لوحة التحكم للمطور' 
     },
     { id: 'spaces', label: 'إدارة مساحات المشتركين', icon: <Building className="w-5 h-5" />, section: 'لوحة التحكم للمطور' },
     { id: 'docker', label: 'تبويب الدوكر ومعالج الاتصال', icon: <HelpCircle className="w-5 h-5" />, section: 'الصيانة والتشخيص' }
-  ] : baseNavItems;
+  ] : baseNavItems.filter(item => item.id !== 'settings' || currentUser.role === 'admin');
 
   const groupedNav: Record<string, typeof navItems> = {};
   navItems.forEach(item => {
@@ -95,13 +104,13 @@ export default function SidebarMenu({
     <>
       {/* Mobile Drawer Overlay background */}
       {isSidebarOpen && (
-        <div 
+        <button type="button" aria-label="إغلاق قائمة التنقل"
           onClick={onToggleSidebar}
-          className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-40 lg:hidden transition-all duration-300"
-        ></div>
+          className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-40 lg:hidden transition-colors duration-300"
+        />
       )}
 
-      <aside className={`fixed top-0 bottom-0 right-0 z-50 flex flex-col w-[275px] bg-[#0b2844] text-slate-100 border-l border-slate-800 shadow-2xl transition-transform duration-300 lg:translate-x-0 ${isSidebarOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'}`}>
+      <aside id="app-navigation" inert={!desktop && !isSidebarOpen} aria-hidden={!desktop && !isSidebarOpen} aria-label="قائمة التنقل" onKeyDown={event => { if (event.key === 'Escape' && !desktop && isSidebarOpen) onToggleSidebar(); }} className={`fixed top-0 bottom-0 right-0 app-navigation z-50 flex flex-col w-[275px] bg-[#0b2844] text-slate-100 border-l border-slate-800 shadow-2xl transition-transform duration-300 lg:translate-x-0 ${isSidebarOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'}`}>
         
         {/* Brand identity Wrapper */}
         <div className="p-5 border-b border-slate-800/80 flex items-center gap-3">
@@ -116,7 +125,7 @@ export default function SidebarMenu({
             <h1 className="text-[14px] font-black tracking-wide truncate text-white" title={companyName}>
               {companyName}
             </h1>
-            <span className="text-[10px] text-slate-400 block font-medium mt-0.5">الإصدار المهني المطور 2026</span>
+            <span className="text-[10px] text-slate-400 block font-medium mt-0.5">LaborAI • إدارة العمالة</span>
           </div>
         </div>
 
@@ -124,12 +133,12 @@ export default function SidebarMenu({
         <div className="mx-4 my-3 p-3.5 bg-slate-900/50 rounded-xl border border-slate-800/85">
           <div className="flex justify-between items-center mb-2">
             <div className="flex items-center gap-2">
-              <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></div>
+              <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 "></div>
               <span className="text-[10px] uppercase font-extrabold text-emerald-450 tracking-wider">الجلسة نشطة</span>
             </div>
             <button 
-              onClick={onLogout}
-              className="text-[10px] text-rose-400 hover:text-rose-300 font-black flex items-center gap-1 hover:bg-rose-500/10 py-1 px-2 rounded-md transition-all cursor-pointer"
+              aria-label="تسجيل الخروج" onClick={onLogout}
+              className="text-[10px] text-rose-400 hover:text-rose-300 font-black flex items-center gap-1 hover:bg-rose-500/10 py-1 px-2 rounded-md transition-colors cursor-pointer"
               title="الخروج من النظام بأمان"
             >
               <LogOut className="w-3 h-3" />
@@ -164,13 +173,14 @@ export default function SidebarMenu({
                 return (
                   <button
                     key={item.id}
+                    aria-current={isActive ? "page" : undefined}
                     onClick={() => {
                       setActiveTab(item.id);
-                      if (window.innerWidth <= 1024) {
+                      if (!desktop) {
                         onToggleSidebar();
                       }
                     }}
-                    className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-right text-xs font-bold transition-all duration-200 group ${isActive ? 'bg-primary-light text-white shadow-md' : 'text-slate-400 hover:bg-slate-800/40 hover:text-white'}`}
+                    className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-right text-sm font-semibold transition-colors duration-200 group ${isActive ? 'bg-primary-light text-white shadow-md' : 'text-slate-200 hover:bg-slate-800/40 hover:text-white'}`}
                   >
                     <div className="flex items-center gap-2.5">
                       <span className={`${isActive ? 'text-white' : 'text-slate-500 group-hover:text-white'}`}>
@@ -192,7 +202,7 @@ export default function SidebarMenu({
 
         {/* Fixed Footer Reset/Demonstration area */}
         <div className="p-4 border-t border-slate-800/80 bg-slate-950/30 text-center gap-1.5 flex flex-col">
-          <button 
+          {currentUser.role === 'admin' && <button
             onClick={() => {
               if (confirm('هل تريد إعادة تعيين كافة البيانات إلى الحالة الافتراضية؟ سيتم إزالة التعديلات والمدفوعات الجديدة.')) {
                 onResetData();
@@ -200,8 +210,8 @@ export default function SidebarMenu({
             }}
             className="w-full text-[10px] bg-red-950/40 text-red-400 border border-red-900/40 hover:bg-red-950/80 hover:text-red-300 py-1.5 px-2 rounded-lg font-bold transition-colors cursor-pointer"
           >
-            🔄 إعادة تعيين وتصفير قاعدة البيانات
-          </button>
+            مسح بيانات مساحة العمل
+          </button>}
           
           <div className="text-[9px] text-slate-500 leading-normal mt-1">
             تصميم وبرمجة المهندس <strong>Shady Nassef</strong><br />

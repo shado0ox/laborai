@@ -1,3 +1,6 @@
+import { lastPaidKafala, formatHijriPeriod } from '../utils/accounting';
+import { isCashReceipt, isDebt as isDebtEntry, getPaymentKind, PAYMENT_KIND_LABELS } from '../utils/paymentKind';
+import { escapeHtml, printLogo } from '../utils/printSafety';
 import React, { useState, useEffect } from 'react';
 import { Employee, Payment, PricingSettings, UserProfile } from '../types';
 import { g2h, g2hObj, h2g } from '../utils/hijri';
@@ -63,24 +66,15 @@ export default function LedgerStatement({
 
   // Filter payments for this specific employee
   const empPayments = payments.filter(
-    p => p.iqamaNo === employee.iqamaNo || p.name === employee.name
+    p => p.iqamaNo === employee.iqamaNo
   );
 
-  const kafalaPays = empPayments.filter(p => p.type?.includes('كفالة'));
+  const kafalaPays = empPayments.filter(p => isCashReceipt(p) && p.type?.includes('كفالة'));
   const iqamaPays = empPayments.filter(p => p.type?.includes('إقامة') || p.type?.includes('رخصة') || p.type?.includes('تجديد'));
   const ramadanPays = kafalaPays.filter(p => p.hijriMonth && parseInt(p.hijriMonth, 10) === 9);
 
   // Determine last paid month text
-  let lastPaidMonthText = 'لم يُسجل سداد';
-  if (kafalaPays.length > 0) {
-    const last = kafalaPays[0]; // Already ordered by date desc in parent
-    if (last.hijriMonth) {
-      const mIdx = parseInt(last.hijriMonth, 10);
-      lastPaidMonthText = `${AR_MONTH_NAMES[mIdx] || last.hijriMonth} ${last.hijriYear || ''}`;
-    } else {
-      lastPaidMonthText = last.date || last.type;
-    }
-  }
+  const lastPaidMonthText = lastPaidKafala(empPayments);
 
   // Pre-calculate estimate remaining months
   let remainingMonthsText = '';
@@ -122,9 +116,9 @@ export default function LedgerStatement({
   let subOtherDebts = 0;
 
   empPayments.forEach(p => {
-    if (p.type?.includes('مديونية')) {
+    if (isDebtEntry(p) && p.balanceIncluded !== false) {
       const amt = parseFloat(String(p.amount || 0));
-      if (p.type?.includes('كفالة')) {
+      if (p.category === 'kafala' || p.type?.includes('كفالة')) {
         subKafalaDebts += amt;
       } else if (p.type?.includes('إقامة') || p.type?.includes('تجديد')) {
         subIqamaDebts += amt;
@@ -176,20 +170,22 @@ export default function LedgerStatement({
 
   // Add all payments / transactions
   empPayments.forEach((p, idx) => {
-    const isKafala = p.type?.includes('كفالة');
+    const isKafala = p.category === 'kafala' || p.type?.includes('كفالة');
     const isIqama = p.type?.includes('تجديد') || p.type?.includes('إقامة');
     const isRamadan = isKafala && p.hijriMonth && parseInt(p.hijriMonth, 10) === 9;
-    const isDebt = p.type?.includes('مديونية');
+    const isDebt = isDebtEntry(p);
     
     let hijriLabel = '';
-    if (isKafala && p.hijriMonth) {
+    if (p.kafalaPeriod) {
+      hijriLabel = formatHijriPeriod(p.kafalaPeriod);
+    } else if (isKafala && p.hijriMonth) {
       const idxM = parseInt(p.hijriMonth, 10);
       hijriLabel = `${AR_MONTH_NAMES[idxM] || p.hijriMonth} ${p.hijriYear || ''}`;
     } else if (isIqama) {
       hijriLabel = 'إقامة';
     }
 
-    const desc = p.type + (isRamadan && pricing.ramadanFree ? ' 🎁 عفو رمضان المجاني' : '') + (p.notes ? ` — ${p.notes}` : '');
+    const desc = (isCashReceipt(p) || isDebtEntry(p) || p.type === PAYMENT_KIND_LABELS[getPaymentKind(p)] ? p.type : `${PAYMENT_KIND_LABELS[getPaymentKind(p)]}: ${p.type}`) + (isRamadan && pricing.ramadanFree && p.amount === 0 ? ' 🎁 عفو رمضان المجاني' : '') + (p.notes ? ` — ${p.notes}` : '');
     
     if (isDebt) {
       ledger.push({
@@ -224,7 +220,7 @@ export default function LedgerStatement({
 
   // Print friendly view using standard high-quality printing
   const handlePrint = () => {
-    const logoSource = logoBase64 ? `<img src="${logoBase64}" style="max-height:80px; max-width:200px; object-fit:contain; border-radius:10px;" />` : '';
+    const logoSource = printLogo(logoBase64);
     const todayStr = new Date().toLocaleDateString('ar-SA', { day: 'numeric', month: 'long', year: 'numeric' });
     
     let running = 0;
@@ -235,9 +231,9 @@ export default function LedgerStatement({
       return `
         <tr style="background-color: ${t.debit > 0 ? '#fffdfd' : '#fdfdfd'}; font-size: 11px;">
           <td style="border: 1px solid #e2e8f0; padding: 8px; text-align: center;">${i + 1}</td>
-          <td style="border: 1px solid #e2e8f0; padding: 8px; text-align: center; font-family: monospace;">${t.date}</td>
-          <td style="border: 1px solid #e2e8f0; padding: 8px; text-align: center; color: #475569;">${t.hijri || '-'}</td>
-          <td style="border: 1px solid #e2e8f0; padding: 8px; text-align: right;">${customNote}</td>
+          <td style="border: 1px solid #e2e8f0; padding: 8px; text-align: center; font-family: monospace;">${escapeHtml(t.date)}</td>
+          <td style="border: 1px solid #e2e8f0; padding: 8px; text-align: center; color: #475569;">${escapeHtml(t.hijri || '-')}</td>
+          <td style="border: 1px solid #e2e8f0; padding: 8px; text-align: right;">${escapeHtml(customNote)}</td>
           <td style="border: 1px solid #e2e8f0; padding: 8px; text-align: center; font-weight: bold; color: #b91c1c;">${t.debit > 0 ? t.debit.toLocaleString('ar-SA') : ''}</td>
           <td style="border: 1px solid #e2e8f0; padding: 8px; text-align: center; font-weight: bold; color: #15803d;">${t.credit > 0 ? t.credit.toLocaleString('ar-SA') : ''}</td>
           <td style="border: 1px solid #e2e8f0; padding: 8px; text-align: center; font-weight: bold; color: ${running > 0 ? '#b91c1c' : '#15803d'};">
@@ -252,7 +248,7 @@ export default function LedgerStatement({
       <html lang="ar" dir="rtl">
       <head>
         <meta charset="utf-8">
-        <title>كشف حساب ${employee.name}</title>
+        <title>كشف حساب ${escapeHtml(employee.name)}</title>
         <link href="https://fonts.googleapis.com/css2family=Tajawal:wght@400;700;800&display=swap" rel="stylesheet">
         <style>
           body {
@@ -364,7 +360,7 @@ export default function LedgerStatement({
           <div class="company-profile">
             ${logoSource}
             <div>
-              <div class="company-name">${companyName || 'نظام إدارة العمالة'}</div>
+              <div class="company-name">${escapeHtml(companyName || 'نظام إدارة العمالة')}</div>
               <div style="font-size:12px; color:#64748b;">إدارة العمالة ومتابعة التراخيص</div>
             </div>
           </div>
@@ -377,21 +373,21 @@ export default function LedgerStatement({
         <table class="info-table">
           <tr>
             <td class="label-col">اسم الموظف:</td>
-            <td><strong>${employee.name}</strong></td>
+            <td><strong>${escapeHtml(employee.name)}</strong></td>
             <td class="label-col">رقم التعريف:</td>
-            <td><strong>${employee.employeeId || 'غير مسجل'}</strong></td>
+            <td><strong>${escapeHtml(employee.employeeId || 'غير مسجل')}</strong></td>
           </tr>
           <tr>
             <td class="label-col">رقم الإقامة:</td>
-            <td style="font-family: monospace;">${employee.iqamaNo}</td>
+            <td style="font-family: monospace;">${escapeHtml(employee.iqamaNo)}</td>
             <td class="label-col">الفرع التابع:</td>
-            <td>${employee.branch || '-'}</td>
+            <td>${escapeHtml(employee.branch || '-')}</td>
           </tr>
           <tr>
             <td class="label-col">رقم الجوال:</td>
-            <td>${employee.mobile || '-'}</td>
+            <td>${escapeHtml(employee.mobile || '-')}</td>
             <td class="label-col">انتهاء الإقامة (هجري):</td>
-            <td><strong>${formattedHijriExpiry || '-'} <small style="font-weight: normal; color: #64748b;">(ميلادي: ${employee.iqamaExpiry})</small></strong></td>
+            <td><strong>${escapeHtml(formattedHijriExpiry || '-')} <small style="font-weight: normal; color: #64748b;">(ميلادي: ${escapeHtml(employee.iqamaExpiry)})</small></strong></td>
           </tr>
         </table>
 
@@ -401,7 +397,7 @@ export default function LedgerStatement({
             <div class="value" style="color: #b91c1c;">${totalDebit.toLocaleString('ar-SA')} ريال</div>
           </div>
           <div class="stat-card" style="border-right: 4px solid #15803d;">
-            <div class="label">إجمالي المدفوع سلفاً</div>
+            <div class="label">إجمالي السداد والخصومات والتسويات</div>
             <div class="value" style="color: #15803d;">${totalCredit.toLocaleString('ar-SA')} ريال</div>
           </div>
           <div class="stat-card" style="border-right: 4px solid ${finalBalance > 0 ? '#b91c1c' : '#15803d'}; background-color: ${finalBalance > 0 ? '#fef2f2' : '#f0fdf4'};">
@@ -411,8 +407,8 @@ export default function LedgerStatement({
             </div>
           </div>
           <div class="stat-card" style="border-right: 4px solid #0d5189;">
-            <div class="label">مسدد له كفالة حتى شهر</div>
-            <div class="value" style="font-size:12px;">${lastPaidMonthText}</div>
+            <div class="label">آخر شهر كفالة سُجل له تحصيل</div>
+            <div class="value" style="font-size:12px;">${escapeHtml(lastPaidMonthText)}</div>
           </div>
         </div>
 
@@ -428,7 +424,7 @@ export default function LedgerStatement({
               <th style="width: 15%;">الشهر الهجري</th>
               <th style="width: 40%">البيان التفصيلي للعملية</th>
               <th style="width: 10%">سحب دَين (مدين)</th>
-              <th style="width: 10%">توريد دفعة (دائن)</th>
+              <th style="width: 10%">سداد / خصم (دائن)</th>
               <th style="width: 15%">المتبقي الجاري</th>
             </tr>
           </thead>
@@ -448,7 +444,7 @@ export default function LedgerStatement({
         </table>
 
         <div class="footer-note">
-          تعتبر هذه الوثيقة كشف حساب داخلي لشركة ${companyName || 'المؤسسة'} - تم استخراجه وتصنيفه برمجياً.
+          تعتبر هذه الوثيقة كشف حساب داخلي لشركة ${escapeHtml(companyName || 'المؤسسة')} - تم استخراجه وتصنيفه برمجياً.
         </div>
 
         <script>
@@ -475,7 +471,7 @@ export default function LedgerStatement({
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-100 pb-4 mb-4">
           <div>
             <div className="flex items-center gap-2 mb-1">
-              <span className="w-2.5 h-2.5 rounded-full bg-primary animate-ping"></span>
+              <span className="w-2.5 h-2.5 rounded-full bg-primary "></span>
               <span className="text-xs text-slate-500 font-bold">ملف حساب العميل غير المسدد</span>
             </div>
             <h3 className="text-xl font-extrabold text-[#0d5189]">{employee.name}</h3>
@@ -526,7 +522,7 @@ export default function LedgerStatement({
         </div>
         
         <div className="bg-emerald-50/40 border border-emerald-100 rounded-2xl p-4 text-center">
-          <span className="text-xs text-slate-500 block mb-1">إجمالي المدفوعات (دائن)</span>
+          <span className="text-xs text-slate-500 block mb-1">إجمالي السداد والخصومات والتسويات (دائن)</span>
           <span className="text-xl font-black text-emerald-700">{totalCredit.toLocaleString()} ريال</span>
         </div>
 
@@ -538,7 +534,7 @@ export default function LedgerStatement({
         </div>
 
         <div className="bg-primary/5 border border-primary/10 rounded-2xl p-4 text-center">
-          <span className="text-xs text-slate-400 block mb-1">آخر كفالة مسددة</span>
+          <span className="text-xs text-slate-400 block mb-1">آخر شهر سُجل له تحصيل كفالة</span>
           <span className="text-sm font-bold text-primary block mt-1.5">{lastPaidMonthText}</span>
         </div>
       </div>
@@ -564,7 +560,7 @@ export default function LedgerStatement({
                 <th className="px-4 py-3 text-center font-bold">الشهر الهجري</th>
                 <th className="px-4 py-3 font-bold text-right">البيان التفصيلي للعملية (اضغط للتعديل)</th>
                 <th className="px-4 py-3 text-center font-bold text-red-600">القيمة المطلوبة (مدين)</th>
-                <th className="px-4 py-3 text-center font-bold text-emerald-600">القيمة المدفوعة (دائن)</th>
+                <th className="px-4 py-3 text-center font-bold text-emerald-600">سداد / خصم / تسوية (دائن)</th>
                 <th className="px-4 py-3 text-center font-bold">الرصيد التراكمي</th>
                 {currentUser?.role !== 'viewer' && (
                   <th className="px-4 py-3 text-center font-bold">التحكم</th>
@@ -599,7 +595,7 @@ export default function LedgerStatement({
                           const val = e.currentTarget.textContent || '';
                           saveLineNote(line.key, val);
                         }}
-                        className="p-1 rounded text-slate-800 text-xs focus:bg-white focus:ring-2 focus:ring-primary focus:outline-none hover:bg-slate-200/50 cursor-pointer transition-all border border-transparent"
+                        className="p-1 rounded text-slate-800 text-xs focus:bg-white focus:ring-2 focus:ring-primary focus:outline-none hover:bg-slate-200/50 cursor-pointer transition-colors border border-transparent"
                         title="انقر هنا لتغيير وصف هذا القيد"
                       >
                         {currentBayan}
@@ -623,13 +619,13 @@ export default function LedgerStatement({
                             onClick={() => {
                               if (onDeletePayment) {
                                 const amt = isDebit ? line.debit : line.credit;
-                                const typeLabel = isDebit ? 'قيد مديونية' : 'دفعة سداد';
+                                const typeLabel = isDebit ? 'قيد مديونية' : 'سداد أو خصم';
                                 if (confirm(`⚠️ تحذير محاسبي!\nهل أنت متأكد من رغبتك في حذف هذا القيد (${typeLabel}) بقيمة ${amt.toLocaleString()} ريال نهائياً من ذمة العامل؟`)) {
                                   onDeletePayment(line.key, employee.name, amt);
                                 }
                               }
                             }}
-                            className="p-1.5 text-red-600 hover:bg-red-50 hover:text-red-700 rounded-lg transition-all inline-flex items-center gap-1 cursor-pointer font-bold"
+                            className="p-1.5 text-red-600 hover:bg-red-50 hover:text-red-700 rounded-lg transition-colors inline-flex items-center gap-1 cursor-pointer font-bold"
                             title="حذف هذا القيد المدخل بالخطأ"
                           >
                             <Trash2 className="w-3.5 h-3.5" />

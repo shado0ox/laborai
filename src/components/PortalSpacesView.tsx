@@ -559,7 +559,7 @@ export default function PortalSpacesView({
                                     موقف - منتهي الصلاحية!
                                   </span>
                                 ) : daysRemaining !== null && daysRemaining <= 30 ? (
-                                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-100 flex items-center gap-0.5 w-fit animate-pulse">
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-100 flex items-center gap-0.5 w-fit ">
                                     <AlertCircle className="w-2.5 h-2.5" />
                                     ينتهي قريباً (خلال {daysRemaining} يوم)
                                   </span>

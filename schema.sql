@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS users (
 
 -- 2. جدول الموظفين (employees)
 CREATE TABLE IF NOT EXISTS employees (
-    iqama_no VARCHAR(15) PRIMARY KEY,
+    iqama_no VARCHAR(15) NOT NULL,
     name VARCHAR(255) NOT NULL,
     employee_id VARCHAR(50),
     iqama_expiry DATE NOT NULL,
@@ -30,22 +30,29 @@ CREATE TABLE IF NOT EXISTS employees (
     added_date VARCHAR(100),
     kafala_start_month VARCHAR(50),
     kafala_start_year VARCHAR(10),
-    tenant_id VARCHAR(128)
+    tenant_id VARCHAR(128) NOT NULL DEFAULT '',
+    PRIMARY KEY (tenant_id, iqama_no)
 );
 
 -- 3. جدول الدفعات (payments)
 CREATE TABLE IF NOT EXISTS payments (
-    id VARCHAR(128) PRIMARY KEY,
+    id VARCHAR(128) NOT NULL,
     iqama_no VARCHAR(15) NOT NULL,
     name VARCHAR(255) NOT NULL,
     branch VARCHAR(150) NOT NULL,
     amount DECIMAL(12, 2) NOT NULL,
     type VARCHAR(150) NOT NULL,
+    transaction_kind VARCHAR(20),
+    category VARCHAR(20),
+    balance_included BOOLEAN,
+    kafala_period JSONB,
+    cash_account VARCHAR(10),
     date DATE NOT NULL,
     notes TEXT,
     hijri_month VARCHAR(50),
     hijri_year VARCHAR(10),
-    tenant_id VARCHAR(128)
+    tenant_id VARCHAR(128) NOT NULL DEFAULT '',
+    PRIMARY KEY (tenant_id, id)
 );
 
 -- 4. جدول إعدادات التسعير (pricing_settings)
@@ -88,14 +95,33 @@ CREATE TABLE IF NOT EXISTS branches (
 
 -- 8. جدول دفتر الأستاذ العام (general_ledger)
 CREATE TABLE IF NOT EXISTS general_ledger (
-    id VARCHAR(128) PRIMARY KEY,
+    id VARCHAR(128) NOT NULL,
     date DATE NOT NULL,
     bayan TEXT NOT NULL,
+    branch VARCHAR(150),
+    category VARCHAR(150),
+    reference VARCHAR(100),
+    cash_account VARCHAR(10),
+    counterpart_account VARCHAR(150),
     debit DECIMAL(12, 2) DEFAULT 0.00,
     credit DECIMAL(12, 2) DEFAULT 0.00,
-    tenant_id VARCHAR(128),
-    created_at VARCHAR(100)
+    tenant_id VARCHAR(128) NOT NULL DEFAULT '',
+    created_at VARCHAR(100),
+    PRIMARY KEY (tenant_id, id)
 );
 
 -- ملاحظة أمان: عمود password يجب أن يحتوي دائماً على قيمة مُشفّرة بـ bcrypt (تبدأ بـ $2a$ أو $2b$).
 -- الخادم (server.ts) لا يقبل تسجيل الدخول بكلمات مرور نصية (plaintext) بعد الآن.
+
+-- حسابات مسؤولي المحلات: المديونية مستقلة عن الدفع النقدي الفعلي.
+CREATE TABLE IF NOT EXISTS shop_entries (
+    tenant_id VARCHAR(128) NOT NULL DEFAULT '', id VARCHAR(128) NOT NULL,
+    branch VARCHAR(150) NOT NULL, date DATE NOT NULL, year INTEGER NOT NULL,
+    kind VARCHAR(20) NOT NULL, amount NUMERIC(12,2) NOT NULL CHECK (amount > 0),
+    category VARCHAR(150) NOT NULL, description TEXT NOT NULL, reference VARCHAR(100),
+    responsible VARCHAR(255), notes TEXT, paid_by_company BOOLEAN NOT NULL DEFAULT FALSE,
+    cash_account VARCHAR(10) NOT NULL DEFAULT 'cash', created_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (tenant_id, id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS shop_reference_unique ON shop_entries (tenant_id, branch, reference)
+WHERE reference IS NOT NULL AND reference <> '';

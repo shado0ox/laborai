@@ -1,3 +1,4 @@
+import { isCashReceipt } from '../utils/paymentKind';
 import React, { useState } from 'react';
 import { Payment, UserProfile } from '../types';
 import { Search, Calendar, Trash2, Filter } from 'lucide-react';
@@ -27,8 +28,8 @@ export default function PaymentsListView({
 
   // Filters payments checklist (exclude debt entries from receipt logs)
   const roleFiltered = activeRole === 'branch' && currentUser.branch
-    ? payments.filter(p => p.branch === currentUser.branch && !p.type?.includes('مديونية'))
-    : payments.filter(p => !p.type?.includes('مديونية'));
+    ? payments.filter(p => p.branch === currentUser.branch && isCashReceipt(p))
+    : payments.filter(p => isCashReceipt(p));
 
   const finalFiltered = roleFiltered.filter(p => {
     const matchesSearch = !searchQuery || p.name.toLowerCase().includes(searchQuery.toLowerCase()) || p.iqamaNo.includes(searchQuery);
@@ -166,7 +167,7 @@ export default function PaymentsListView({
                             onDeletePayment(p.id, p.name, p.amount);
                           }
                         }}
-                        className="p-1 text-red-600 hover:bg-red-50 rounded transition-all"
+                        className="p-1 text-red-600 hover:bg-red-50 rounded transition-colors"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>

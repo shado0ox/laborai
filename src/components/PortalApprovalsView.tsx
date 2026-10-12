@@ -25,7 +25,7 @@ export default function PortalApprovalsView({
   // Filter users
   const filteredUsers = users.filter(u => {
     // Exclude the default program manager so they don't accidentally edit or delete themselves
-    if (u.email === 'shady.nasif@gmail.com') return false;
+    if (u.isDeveloper) return false;
 
     // مطور البرنامج يرى فقط مدراء المساحات (المدراء الرئيسيين) ولا يرى المساعدين أو المشرفين الفرعيين للمساحة
     if (u.role !== 'admin') return false;
@@ -38,7 +38,7 @@ export default function PortalApprovalsView({
   const getStatusBadge = (status?: string) => {
     if (status === 'approved') return 'bg-emerald-100 text-emerald-850 border border-emerald-200';
     if (status === 'rejected') return 'bg-red-100 text-red-850 border border-red-200';
-    return 'bg-amber-100 text-amber-850 border border-amber-200 animate-pulse';
+    return 'bg-amber-100 text-amber-850 border border-amber-200 ';
   };
 
   const getStatusLabel = (status?: string) => {
@@ -79,7 +79,7 @@ export default function PortalApprovalsView({
             <span className="text-2xl font-black text-amber-650">{users.filter(u => u.status === 'pending' || !u.status).length} طلبات</span>
           </div>
           <div className="p-3 bg-amber-50 text-amber-600 rounded-xl">
-            <ShieldCheck className="w-6 h-6 animate-pulse" />
+            <ShieldCheck className="w-6 h-6 " />
           </div>
         </div>
 
@@ -122,27 +122,27 @@ export default function PortalApprovalsView({
           <div className="flex gap-1.5 bg-slate-950/40 p-1 rounded-xl">
             <button
               onClick={() => setActiveSubTab('pending')}
-              className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${activeSubTab === 'pending' ? 'bg-amber-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'}`}
+              className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${activeSubTab === 'pending' ? 'bg-amber-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'}`}
             >
               ⏳ طلبات معلقة ({users.filter(u => u.status === 'pending' || !u.status).length})
             </button>
             <button
               onClick={() => setActiveSubTab('approved')}
-              className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${activeSubTab === 'approved' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'}`}
+              className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${activeSubTab === 'approved' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'}`}
             >
-              ✅ نشطين ({users.filter(u => u.status === 'approved' && u.email !== 'shady.nasif@gmail.com').length})
+              ✅ نشطين ({users.filter(u => u.status === 'approved' && !u.isDeveloper).length})
             </button>
             <button
               onClick={() => setActiveSubTab('rejected')}
-              className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${activeSubTab === 'rejected' ? 'bg-red-650 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'}`}
+              className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${activeSubTab === 'rejected' ? 'bg-red-650 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'}`}
             >
               ❌ طلبات مرفوضة ({users.filter(u => u.status === 'rejected').length})
             </button>
             <button
               onClick={() => setActiveSubTab('all')}
-              className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${activeSubTab === 'all' ? 'bg-slate-700 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'}`}
+              className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${activeSubTab === 'all' ? 'bg-slate-700 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'}`}
             >
-              📂 الكل ({users.filter(u => u.email !== 'shady.nasif@gmail.com').length})
+              📂 الكل ({users.filter(u => !u.isDeveloper).length})
             </button>
           </div>
         </div>
@@ -347,7 +347,7 @@ export default function PortalApprovalsView({
                                 onDeleteUser(user.uid);
                               }
                             }}
-                            className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-slate-100 rounded-lg transition-all"
+                            className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-slate-100 rounded-lg transition-colors"
                             title="حذف هذا الحساب بالكامل"
                           >
                             <Trash2 className="w-3.5 h-3.5" />

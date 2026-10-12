@@ -1,3 +1,5 @@
+import { validHijriPeriod } from './src/utils/accounting';
+import { getPaymentKind } from './src/utils/paymentKind';
 import express from "express";
 import path from "path";
 import crypto from "crypto";
@@ -149,7 +151,7 @@ const userPostSchema = z.object({
 });
 
 const userPutSchema = z.object({
-  status: z.string().nullable().optional(),
+  status: z.enum(["pending", "approved", "rejected"]).optional(),
   role: z.enum(["admin", "branch", "viewer"]).optional(),
   branch: z.string().nullable().optional(),
 });
@@ -162,7 +164,7 @@ const employeeSchema = z.object({
   mobile: z.string().optional().nullable(),
   branch: z.string().min(1, "الفرع مطلوب"),
   iqamaBalance: numericSchema("رصيد رخصة الإقامة"),
-  kafalaCount: numericSchema("عدد الكفالات"),
+  kafalaCount: numericSchema("عدد الكفالات").refine(value => Number.isInteger(value), "عدد الكفالات يجب أن يكون عدداً صحيحاً"),
   otherDebt: numericSchema("الديون الأخرى"),
   otherDebtDesc: z.string().optional().nullable(),
   notes: z.string().optional().nullable(),
@@ -176,7 +178,19 @@ const employeeSchema = z.object({
   kafalaStartYear: z.string().optional().nullable(),
 });
 
+const hijriPeriodSchema = z.object({
+  fromMonth: z.number().int().min(1).max(12), fromYear: z.number().int().min(1300).max(1700),
+  toMonth: z.number().int().min(1).max(12), toYear: z.number().int().min(1300).max(1700),
+  freeFromMonth: z.number().int().min(1).max(12).optional(), freeFromYear: z.number().int().min(1300).max(1700).optional(),
+  freeToMonth: z.number().int().min(1).max(12).optional(), freeToYear: z.number().int().min(1300).max(1700).optional()
+}).refine(validHijriPeriod, { message: "فترة الكفالة غير صحيحة أو فترة الإعفاء خارجها." });
+
 const paymentSchema = z.object({
+  category: z.enum(["kafala", "iqama", "insurance", "other"]).optional(),
+  balanceIncluded: z.boolean().optional(),
+  kafalaPeriod: hijriPeriodSchema.optional(),
+  cashAccount: z.enum(["cash", "bank"]).optional(),
+  transactionKind: z.enum(["receipt", "debt", "discount", "settlement"]).optional(),
   id: z.string().min(1, "معرف الدفعة مطلوب"),
   iqamaNo: z.string().min(1, "رقم الإقامة مطلوب"),
   name: z.string().min(1, "الاسم مطلوب"),
@@ -190,13 +204,15 @@ const paymentSchema = z.object({
 });
 
 const generalLedgerSchema = z.object({
+  branch: z.string().max(150).optional(), category: z.string().max(150).optional(), reference: z.string().max(100).optional(),
+  cashAccount: z.enum(["cash", "bank"]).optional(), counterpartAccount: z.string().max(150).optional(),
   id: z.string().min(1, "المعرف مطلوب"),
   date: dateSchema("القيد"),
   bayan: z.string().min(1, "البيان مطلوب"),
   debit: numericSchema("مدين"),
   credit: numericSchema("دائن"),
   createdAt: optionalDateSchema("الإنشاء"),
-});
+}).refine(entry => (entry.debit > 0) !== (entry.credit > 0), { message: "أدخل مبلغاً في المدين أو الدائن فقط." });
 
 const companySettingsSchema = z.object({
   name: z.string().min(1, "اسم الشركة مطلوب"),
@@ -287,20 +303,57 @@ if (!DEV_DEFAULT_PASSWORD_FROM_ENV) {
   console.log("\x1b[33m==========================================================================\n\x1b[0m");
 }
 
-const requireAuth = (req: any, res: any, next: any) => {
+const requireAuth = async (req: any, res: any, next: any) => {
   const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({ error: "يرجى تسجيل الدخول أولاً للوصول إلى هذه البيانات." });
-  }
-  const token = authHeader.split(" ")[1];
+  if (!authHeader?.startsWith("Bearer ")) return res.status(401).json({ error: "يرجى تسجيل الدخول أولاً." });
+  let decoded: any;
   try {
-    const decoded = jwt.verify(token, JWT_SECRET as string) as any;
-    req.user = decoded;
-    next();
-  } catch (err) {
+    decoded = jwt.verify(authHeader.slice(7), JWT_SECRET as string, { algorithms: ["HS256"] });
+  } catch {
     return res.status(401).json({ error: "جلسة الدخول منتهية أو غير صالحة. يرجى تسجيل الدخول مجدداً." });
   }
+  try {
+    const user = pool
+      ? (await runQuery("SELECT * FROM users WHERE uid = ?", [decoded.uid]))[0]
+      : fallbackUsers.find(u => u.uid === decoded.uid);
+    if (!user || user.status !== "approved" || user.email !== decoded.email ||
+        user.role !== decoded.role || (user.tenant_id || user.tenantId || "") !== (decoded.tenantId || "")) {
+      return res.status(401).json({ error: "تغيّرت صلاحيات الحساب أو حالته. يرجى تسجيل الدخول مجدداً." });
+    }
+    req.user = { uid: user.uid, name: user.name, email: user.email, role: user.role,
+      branch: user.branch, tenantId: user.tenant_id || user.tenantId || "" };
+    if (!isDevEmail(user.email)) {
+      const company = pool
+        ? (await runQuery("SELECT * FROM company_settings WHERE tenant_id = ?", [req.user.tenantId]))[0]
+        : fallbackCompany.get(req.user.tenantId);
+      req.company = company;
+      const expiry = company?.expiration_date || company?.expirationDate;
+      if (expiry && expiry < new Date().toISOString().slice(0, 10) && req.path !== "/api/company-settings" && req.path !== "/api/auth/me") {
+        return res.status(403).json({ error: "انتهى اشتراك المنشأة. تواصل مع الإدارة لتجديده." });
+      }
+    }
+    next();
+  } catch (err) { return sendServerError(res, err); }
 };
+
+const requireAdmin = (req: any, res: any, next: any) => {
+  if (req.user.role !== "admin") return res.status(403).json({ error: "هذا الإجراء متاح لمدير الشركة فقط." });
+  next();
+};
+
+const requireLedger = (req: any, res: any, next: any) => {
+  if (req.user.role !== "admin" && !(req.company?.allow_ledger_for_users || req.company?.allowLedgerForUsers)) {
+    return res.status(403).json({ error: "لم يسمح مدير الشركة بالوصول إلى الدفتر العام." });
+  }
+  next();
+};
+
+const inBranch = (req: any, branch: string) => req.user.role !== "branch" || (!!req.user.branch && req.user.branch === branch);
+
+async function findEmployee(tenantId: string, iqamaNo: string) {
+  return pool ? (await runQuery("SELECT * FROM employees WHERE COALESCE(tenant_id, '') = ? AND iqama_no = ?", [tenantId, iqamaNo]))[0]
+    : fallbackEmployees.find(e => (e.tenantId || "") === tenantId && e.iqamaNo === iqamaNo);
+}
 
 const requireDev = (req: any, res: any, next: any) => {
   if (!req.user || !isDevEmail(req.user.email)) {
@@ -311,7 +364,7 @@ const requireDev = (req: any, res: any, next: any) => {
 
 const getTenantId = (req: any): string => {
   if (req.user && isDevEmail(req.user.email)) {
-    return (req.query.tenantId as string) || req.user.tenantId || "";
+    return (typeof req.query.tenantId === "string" ? req.query.tenantId : "") || req.user.tenantId || "";
   }
   return req.user ? (req.user.tenantId || "") : "";
 };
@@ -336,6 +389,8 @@ const app = express();
 // بدل ما يرميهم كلهم في سلة واحدة أو يرمي استثناء يوقف السيرفر بالكامل.
 // القيمة "1" تعني: نثق في أول بروكسي بس (cloudflared نفسه)، مش أي بروكسي إضافي وراه.
 app.set('trust proxy', 1);
+let databaseReady = false;
+const allowMemoryFallback = process.env.NODE_ENV !== "production" && process.env.ALLOW_MEMORY_FALLBACK === "true";
 const PORT = parseInt(process.env.PORT || "3000");
 
 // Security headers
@@ -358,6 +413,19 @@ const apiLimiter = rateLimit({
   message: { error: "عدد كبير جداً من الطلبات من هذا العنوان. حاول مرة أخرى بعد قليل." },
 });
 app.use("/api", apiLimiter);
+app.get("/api/health", async (_req, res) => {
+  let ready = databaseReady;
+  if (ready && pool) {
+    try { await pool.query("SELECT 1"); dbStatus = "connected"; }
+    catch { ready = false; dbStatus = "disconnected"; }
+  }
+  res.status(ready ? 200 : 503).json({ ready, storage: pool ? "postgres" : "memory" });
+});
+app.use("/api", (_req, res, next) => {
+  if (!databaseReady || (!pool && !allowMemoryFallback)) return res.status(503).json({ error: "قاعدة البيانات غير متاحة. لم يتم حفظ أي تغييرات؛ حاول لاحقاً." });
+  next();
+});
+app.get("/api/auth/me", requireAuth, (req: any, res) => res.json({ ...req.user, isDeveloper: isDevEmail(req.user.email) }));
 
 // Strict rate limiting on login and self-registration to block brute-force/spam
 const authLimiter = rateLimit({
@@ -432,6 +500,7 @@ async function connectDB() {
     try {
       console.log(`Connecting to PostgreSQL database at ${DB_HOST}:${DB_PORT}...`);
       pool = new Pool({
+        max: 5,
         host: DB_HOST,
         port: DB_PORT,
         user: DB_USER,
@@ -440,6 +509,7 @@ async function connectDB() {
         connectionTimeoutMillis: 2000,
       });
       
+      pool.on("error", (error) => { dbStatus = "disconnected"; dbError = error.message; console.error("PostgreSQL pool error:", error.message); });
       // Test connection
       const client = await pool.connect();
       console.log("✓ Successfully connected to PostgreSQL database!");
@@ -465,7 +535,7 @@ async function connectDB() {
     }
   }
 
-  if (!pool) {
+  if (!pool && allowMemoryFallback) {
     console.warn("⚠️ Warning: Could not connect to the PostgreSQL server. Falling back to dynamic mock state in-memory.");
     console.warn("⚠️ تنبيه: كل البيانات في هذا الوضع مؤقتة في الذاكرة فقط وستُفقد عند إعادة تشغيل الخادم — لا تستخدم هذا الوضع لتخزين بيانات حقيقية.");
     console.log("\x1b[33mبيانات دخول تجريبية (وضع الذاكرة المؤقت فقط):\x1b[0m");
@@ -495,8 +565,8 @@ const dropTableIfAllowed = async (client: any, tableName: string): Promise<boole
 // Auto-migration helper to setup tables in PostgreSQL
 async function initializeTables() {
   if (!pool) return;
+  const client = await pool.connect();
   try {
-    const client = await pool.connect();
 
     console.log("[MIGRATION] Verifying and applying automated schema structure migrations...");
 
@@ -636,6 +706,13 @@ async function initializeTables() {
       );
     `);
 
+    await client.query(`ALTER TABLE payments
+      ADD COLUMN IF NOT EXISTS transaction_kind VARCHAR(20),
+      ADD COLUMN IF NOT EXISTS category VARCHAR(20),
+      ADD COLUMN IF NOT EXISTS balance_included BOOLEAN,
+      ADD COLUMN IF NOT EXISTS kafala_period JSONB,
+      ADD COLUMN IF NOT EXISTS cash_account VARCHAR(10)`);
+
     // 4. Pricing Settings table
     await client.query(`
       CREATE TABLE IF NOT EXISTS pricing_settings (
@@ -713,6 +790,43 @@ async function initializeTables() {
       );
     `);
 
+    await client.query(`ALTER TABLE general_ledger
+      ADD COLUMN IF NOT EXISTS branch VARCHAR(150), ADD COLUMN IF NOT EXISTS category VARCHAR(150),
+      ADD COLUMN IF NOT EXISTS reference VARCHAR(100), ADD COLUMN IF NOT EXISTS cash_account VARCHAR(10),
+      ADD COLUMN IF NOT EXISTS counterpart_account VARCHAR(150)`);
+    await client.query(`CREATE TABLE IF NOT EXISTS shop_entries (
+      tenant_id VARCHAR(128) NOT NULL DEFAULT '', id VARCHAR(128) NOT NULL,
+      branch VARCHAR(150) NOT NULL, date DATE NOT NULL, year INTEGER NOT NULL,
+      kind VARCHAR(20) NOT NULL, amount NUMERIC(12,2) NOT NULL CHECK (amount > 0),
+      category VARCHAR(150) NOT NULL, description TEXT NOT NULL, reference VARCHAR(100),
+      responsible VARCHAR(255), notes TEXT, paid_by_company BOOLEAN NOT NULL DEFAULT FALSE,
+      cash_account VARCHAR(10) NOT NULL DEFAULT 'cash', created_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (tenant_id, id)
+    )`);
+
+    await client.query("CREATE UNIQUE INDEX IF NOT EXISTS shop_reference_unique ON shop_entries (tenant_id, branch, reference) WHERE reference IS NOT NULL AND reference <> ''");
+
+    // Non-destructive upgrade: tenant + record ID is the ownership boundary.
+    await client.query("BEGIN");
+    try {
+      await client.query("ALTER TABLE payments DROP CONSTRAINT IF EXISTS payments_iqama_no_fkey");
+      for (const [table, key] of [["employees", "iqama_no"], ["payments", "id"], ["general_ledger", "id"]]) {
+        const pk = await client.query("SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE conrelid = $1::regclass AND contype = 'p'", [table]);
+        if (!pk.rows[0]?.definition.includes("tenant_id")) {
+          await client.query(`UPDATE ${table} SET tenant_id = '' WHERE tenant_id IS NULL`);
+          await client.query(`ALTER TABLE ${table} ALTER COLUMN tenant_id SET DEFAULT '', ALTER COLUMN tenant_id SET NOT NULL`);
+          await client.query(`ALTER TABLE ${table} DROP CONSTRAINT IF EXISTS ${table}_pkey`);
+          if (table === "employees") await client.query("ALTER TABLE employees DROP CONSTRAINT IF EXISTS employees_iqama_no_key");
+          await client.query(`ALTER TABLE ${table} ADD PRIMARY KEY (tenant_id, ${key})`);
+        }
+      }
+      await client.query("CREATE UNIQUE INDEX IF NOT EXISTS users_normalized_email ON users (LOWER(TRIM(email)))");
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    }
+
     // Ensure Developer Account exists in the users table
     const devCheck = await client.query("SELECT * FROM users WHERE email = $1", [DEV_EMAIL]);
     if (devCheck.rowCount === 0) {
@@ -734,10 +848,10 @@ async function initializeTables() {
     }
 
     console.log("✓ All PostgreSQL database tables verified and initialized successfully.");
-    client.release();
   } catch (err: any) {
     console.error("Database migration error during initialization:", err);
-  }
+    throw err;
+  } finally { client.release(); }
 }
 
 // In-Memory fallback databases
@@ -792,6 +906,7 @@ let fallbackPricing: Map<string, any> = new Map([
   ["", { kafala: 250, iqama3: 3550, iqama6: 7100, iqama12: 14200, ramadanFree: true }]
 ]);
 let fallbackGeneralLedger: any[] = [];
+let fallbackShopEntries: any[] = [];
 
 
 // --- API ROUTES ---
@@ -814,18 +929,11 @@ async function runQuery(sql: string, params: any[] = []): Promise<any> {
     const result = await pool.query(pgSql, slicedParams);
     return result.rows;
   }
-  return null;
+  throw new Error("Database unavailable");
 }
 
 // DB Status diagnostic
 app.get("/api/db-status", requireAuth, requireDev, async (req: any, res: any) => {
-  if (!pool || dbStatus === "disconnected") {
-    console.log("[DB] Attempting dynamic reconnect from /api/db-status...");
-    await connectDB();
-    if (dbStatus === "connected" && pool) {
-      await initializeTables();
-    }
-  }
   res.json({
     status: dbStatus,
     host: DB_HOST,
@@ -856,7 +964,7 @@ app.post("/api/auth/login", authLimiter, async (req, res) => {
     }
 
     if (!user) {
-      return res.status(401).json({ error: "البريد الإلكتروني غير مسجّل بمستودعات النظام." });
+      return res.status(401).json({ error: "البريد الإلكتروني أو كلمة المرور غير صحيحة." });
     }
 
     const isBcrypt = user.password && (user.password.startsWith("$2a$") || user.password.startsWith("$2b$"));
@@ -869,14 +977,14 @@ app.post("/api/auth/login", authLimiter, async (req, res) => {
     const isPasswordCorrect = await bcrypt.compare(password, user.password);
 
     if (!isPasswordCorrect) {
-      return res.status(401).json({ error: "كلمة المرور أو رمز التفويض غير صحيح." });
+      return res.status(401).json({ error: "البريد الإلكتروني أو كلمة المرور غير صحيحة." });
     }
 
     if (user.status === 'pending') {
       return res.status(403).json({ error: "حسابك قيد المراجعة وبانتظار موافقة مدير البرنامج لتفعيله." });
     }
 
-    if (user.status === 'rejected') {
+    if (user.status !== 'approved') {
       return res.status(403).json({ error: "تم رفض طلب تسجيلك في البوابة. تواصل مع الإدارة للدعم." });
     }
 
@@ -896,6 +1004,7 @@ app.post("/api/auth/login", authLimiter, async (req, res) => {
       uid: user.uid,
       name: user.name,
       email: user.email,
+      isDeveloper: isDevEmail(user.email),
       role: user.role,
       branch: user.branch || undefined,
       status: user.status,
@@ -944,6 +1053,7 @@ app.get("/api/users", requireAuth, async (req: any, res: any) => {
 
       const mapped = rows.map((r: any) => ({
         uid: r.uid,
+        isDeveloper: isDevEmail(r.email),
         name: r.name,
         email: r.email,
         role: r.role,
@@ -966,6 +1076,7 @@ app.get("/api/users", requireAuth, async (req: any, res: any) => {
 
     const mappedFallback = filteredFallback.map((u: any) => ({
       uid: u.uid,
+      isDeveloper: isDevEmail(u.email),
       name: u.name,
       email: u.email,
       role: u.role,
@@ -981,130 +1092,69 @@ app.get("/api/users", requireAuth, async (req: any, res: any) => {
 });
 
 app.post("/api/users", authLimiter, async (req: any, res: any) => {
-  const parseResult = userPostSchema.safeParse(req.body);
-  if (!parseResult.success) {
-    return res.status(400).json({ error: formatZodError(parseResult.error) });
+  if (req.headers.authorization) {
+    return requireAuth(req, res, () => requireAdmin(req, res, () => createUser(req, res)));
   }
-  const u = parseResult.data;
-  const normEmail = String(u.email).toLowerCase().trim();
-
-  // If registering as main developer, reject!
-  if (isDevEmail(normEmail) || u.uid === "user-admin") {
-    return res.status(403).json({ error: "لا يمكن تعديل أو تسجيل حساب المطور الرئيسي!" });
-  }
-
-  // SECURITY: enforce a minimum password strength for any new plaintext password.
-  // (Already-hashed bcrypt values, e.g. when an admin re-saves a user, are left untouched.)
-  if (u.password && !u.password.startsWith("$2a$") && !u.password.startsWith("$2b$") && u.password.length < 8) {
-    return res.status(400).json({ error: "كلمة المرور: يجب ألا تقل عن 8 أحرف." });
-  }
-
-  // Get authorization token if present
-  let authUser: any = null;
-  const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith("Bearer ")) {
-    const token = authHeader.split(" ")[1];
-    try {
-      authUser = jwt.verify(token, JWT_SECRET);
-    } catch (e) {}
-  }
-
-  // Enforce pending status if NOT an admin creating/updating the user
-  let finalStatus = u.status || "pending";
-  if (!authUser || authUser.role !== "admin") {
-    finalStatus = "pending";
-  }
-
-  // SECURITY / BUSINESS RULE:
-  // هذا المنفذ العام (بدون توكن) يُستخدم فقط لتسجيل شركة جديدة تطلب مساحة خاصة مستقلة (تينانت جديد).
-  // تسجيل أعضاء/مسؤولي الفروع التابعين لشركة قائمة لا يجوز أن يتم إلا من مدير الشركة (مدير المساحة)
-  // وهو مسجّل دخوله فعلياً (Bearer token صالح برتبة admin)، ولا يجوز أبداً أن يحدد الـ tenantId بنفسه.
-  let finalTenantId: string | null;
-  let finalBranch: string | null = u.branch || null;
-
-  if (authUser && authUser.role === "admin") {
-    // مدير شركة قام بتسجيل الدخول ويضيف عضو/مسؤول فرع (أو مستخدم آخر) داخل مساحته الخاصة فقط.
-    finalTenantId = authUser.tenantId || null;
-    if (u.role === "branch" && !finalBranch) {
-      return res.status(400).json({ error: "يجب تحديد الفرع عند إضافة عضو مسؤول فرع." });
-    }
-  } else {
-    // طلب عام غير مُصادق عليه: مسموح فقط بتسجيل شركة جديدة (مساحة خاصة مستقلة)، وليس عضو فرع.
-    if (u.role !== "admin") {
-      return res.status(403).json({ error: "تسجيل أعضاء ومسؤولي الفروع لا يتم إلا عن طريق مدير الشركة من داخل لوحة التحكم بعد تسجيل الدخول." });
-    }
-    // نتجاهل أي tenantId قادم من العميل ونولّد واحداً جديداً موثوقاً من الخادم لضمان عزل المساحة.
-    finalTenantId = `tenant_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
-    finalBranch = null;
-  }
-
-  try {
-    let passwordToSave = u.password || null;
-    if (passwordToSave && !passwordToSave.startsWith("$2a$") && !passwordToSave.startsWith("$2b$")) {
-      passwordToSave = await bcrypt.hash(passwordToSave, 10);
-    }
-
-    if (pool) {
-      // Check if email already exists
-      const existing: any = await runQuery("SELECT uid FROM users WHERE LOWER(TRIM(email)) = ?", [normEmail]);
-      if (existing && existing.length > 0 && existing[0].uid !== u.uid) {
-        return res.status(400).json({ error: "البريد الإلكتروني هذا مستخدم بالفعل ومسجّل من قبل." });
-      }
-
-      await runQuery(
-        "INSERT INTO users (uid, name, email, role, branch, status, tenant_id, password, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (uid) DO UPDATE SET name=EXCLUDED.name, role=EXCLUDED.role, branch=EXCLUDED.branch, status=EXCLUDED.status, password=EXCLUDED.password",
-        [
-          u.uid,
-          u.name,
-          u.email,
-          u.role,
-          finalBranch,
-          finalStatus,
-          finalTenantId,
-          passwordToSave,
-          u.createdAt || new Date().toISOString()
-        ]
-      );
-      const returnedUser = { ...u, branch: finalBranch || undefined, tenantId: finalTenantId || undefined, status: finalStatus };
-      delete returnedUser.password;
-      return res.json({ success: true, user: returnedUser });
-    } else {
-      const existing = fallbackUsers.find(user => user.email.toLowerCase().trim() === normEmail);
-      if (existing && existing.uid !== u.uid) {
-        return res.status(400).json({ error: "البريد الإلكتروني هذا مستخدم بالفعل ومسجّل من قبل." });
-      }
-
-      const existingIdx = fallbackUsers.findIndex((user) => user.uid === u.uid);
-      const updatedUser = { ...u, branch: finalBranch || undefined, tenantId: finalTenantId || undefined, status: finalStatus, password: passwordToSave || undefined };
-      if (existingIdx !== -1) {
-        fallbackUsers[existingIdx] = { ...fallbackUsers[existingIdx], ...updatedUser };
-      } else {
-        fallbackUsers.push(updatedUser);
-      }
-      const returnedUserFallback = { ...updatedUser };
-      delete returnedUserFallback.password;
-      return res.json({ success: true, user: returnedUserFallback });
-    }
-  } catch (err: any) {
-    sendServerError(res, err);
-  }
+  return createUser(req, res);
 });
 
-app.put("/api/users/:uid", requireAuth, async (req: any, res: any) => {
+async function createUser(req: any, res: any) {
+  const parsed = userPostSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: formatZodError(parsed.error) });
+  const u = parsed.data;
+  const email = u.email.trim().toLowerCase();
+  if (isDevEmail(email)) return res.status(403).json({ error: "لا يمكن تسجيل حساب المطور الرئيسي." });
+  if (!u.password || u.password.length < 8 || Buffer.byteLength(u.password, "utf8") > 72 || /^\$2[aby]\$/.test(u.password)) {
+    return res.status(400).json({ error: "أدخل كلمة مرور من 8 أحرف على الأقل وبحد أقصى 72 بايت." });
+  }
+  if (!req.user && u.role !== "admin") return res.status(403).json({ error: "إضافة أعضاء الشركة متاحة لمديرها فقط." });
+  const tenantId = req.user ? req.user.tenantId : `tenant_${crypto.randomUUID()}`;
+  const branch = req.user && u.role === "branch" ? u.branch : null;
+  try {
+    if (u.role === "branch") {
+      const branches = pool ? (await runQuery("SELECT name FROM branches WHERE tenant_id = ?", [tenantId])).map((b: any) => b.name) : fallbackBranches.get(tenantId) || [];
+      if (!branch || !branches.includes(branch)) return res.status(400).json({ error: "اختر فرعاً موجوداً في الشركة." });
+    }
+    const exists = pool ? (await runQuery("SELECT uid FROM users WHERE LOWER(TRIM(email)) = ?", [email])).length > 0
+      : fallbackUsers.some(user => user.email.trim().toLowerCase() === email);
+    if (exists) return res.status(409).json({ error: "البريد الإلكتروني مسجّل بالفعل." });
+    const password = await bcrypt.hash(u.password, 10);
+    const user = { uid: `user_${crypto.randomUUID()}`, name: u.name, email, role: u.role,
+      branch, status: req.user ? "approved" : "pending", tenantId, createdAt: new Date().toISOString() };
+    if (pool) {
+      await runQuery("INSERT INTO users (uid, name, email, role, branch, status, tenant_id, password, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [user.uid, user.name, email, user.role, branch, user.status, tenantId || null, password, user.createdAt]);
+    } else fallbackUsers.push({ ...user, password });
+    return res.status(201).json({ success: true, user });
+  } catch (err: any) {
+    if (err.code === "23505") return res.status(409).json({ error: "البريد الإلكتروني مسجّل بالفعل." });
+    return sendServerError(res, err);
+  }
+}
+
+app.put("/api/users/:uid", requireAuth, requireAdmin, async (req: any, res: any) => {
   const { uid } = req.params;
   const parseResult = userPutSchema.safeParse(req.body);
   if (!parseResult.success) {
     return res.status(400).json({ error: formatZodError(parseResult.error) });
   }
   const updates = parseResult.data;
+  if (uid === req.user.uid && ((updates.role && updates.role !== "admin") || (updates.status && updates.status !== "approved"))) return res.status(403).json({ error: "لا يمكنك تعطيل حسابك أو خفض صلاحياته." });
   const callerEmail = req.user?.email || "";
   const callerIsDev = isDevEmail(callerEmail);
   const callerTenantId = req.user?.tenantId || "";
   try {
     if (pool) {
-      const dbUsers: any = await runQuery("SELECT email, tenant_id FROM users WHERE uid = ?", [uid]);
+      const dbUsers: any = await runQuery("SELECT email, tenant_id, status FROM users WHERE uid = ?", [uid]);
       const isDev = (dbUsers && dbUsers.length > 0 && dbUsers[0].email === DEV_EMAIL) || uid === "user-admin";
 
+      if (!dbUsers.length) return res.status(404).json({ error: "المستخدم غير موجود." });
+      if (!callerIsDev && dbUsers[0].status === "pending") return res.status(403).json({ error: "اعتماد التسجيل متاح لمطور النظام فقط." });
+      if (updates.role === "branch" || updates.branch) {
+        const branch = updates.branch;
+        const owned = branch && await runQuery("SELECT name FROM branches WHERE tenant_id = ? AND name = ?", [dbUsers[0].tenant_id || "", branch]);
+        if (!owned?.length) return res.status(400).json({ error: "اختر فرعاً موجوداً في الشركة." });
+      }
       // SECURITY: مدير الشركة لا يجوز أن يعدّل صلاحيات أو فروع مستخدمين من مساحة/شركة أخرى.
       if (!callerIsDev && dbUsers && dbUsers.length > 0 && (dbUsers[0].tenant_id || "") !== callerTenantId) {
         return res.status(403).json({ error: "لا تملك صلاحية تعديل مستخدم خارج نطاق مساحتك (شركتك) الخاصة." });
@@ -1138,6 +1188,12 @@ app.put("/api/users/:uid", requireAuth, async (req: any, res: any) => {
       return res.json({ success: true });
     } else {
       const targetUser = fallbackUsers.find((u) => u.uid === uid);
+      if (!targetUser) return res.status(404).json({ error: "المستخدم غير موجود." });
+      if (req.method === "PUT") {
+        if (!callerIsDev && targetUser.status === "pending") return res.status(403).json({ error: "اعتماد التسجيل متاح لمطور النظام فقط." });
+        const updates = req.body;
+        if ((updates.role === "branch" || updates.branch) && !(fallbackBranches.get(targetUser.tenantId || "") || []).includes(updates.branch)) return res.status(400).json({ error: "اختر فرعاً موجوداً في الشركة." });
+      }
       const isDev = (targetUser && targetUser.email === DEV_EMAIL) || uid === "user-admin";
 
       if (!callerIsDev && targetUser && (targetUser.tenantId || "") !== callerTenantId) {
@@ -1168,13 +1224,14 @@ app.put("/api/users/:uid", requireAuth, async (req: any, res: any) => {
   }
 });
 
-app.delete("/api/users/:uid", requireAuth, async (req: any, res: any) => {
+app.delete("/api/users/:uid", requireAuth, requireAdmin, async (req: any, res: any) => {
   const { uid } = req.params;
+  if (uid === req.user.uid) return res.status(403).json({ error: "لا يمكنك حذف حسابك الحالي." });
   const callerIsDev = isDevEmail(req.user?.email || "");
   const callerTenantId = req.user?.tenantId || "";
   try {
     if (pool) {
-      const dbUsers: any = await runQuery("SELECT email, tenant_id FROM users WHERE uid = ?", [uid]);
+      const dbUsers: any = await runQuery("SELECT email, tenant_id, status FROM users WHERE uid = ?", [uid]);
       const isDev = (dbUsers && dbUsers.length > 0 && dbUsers[0].email === DEV_EMAIL) || uid === "user-admin";
       if (isDev) {
         return res.status(403).json({ error: "لا يمكن حذف حساب مطور البرنامج الرئيسي نهائياً!" });
@@ -1186,6 +1243,12 @@ app.delete("/api/users/:uid", requireAuth, async (req: any, res: any) => {
       return res.json({ success: true });
     } else {
       const targetUser = fallbackUsers.find((u) => u.uid === uid);
+      if (!targetUser) return res.status(404).json({ error: "المستخدم غير موجود." });
+      if (req.method === "PUT") {
+        if (!callerIsDev && targetUser.status === "pending") return res.status(403).json({ error: "اعتماد التسجيل متاح لمطور النظام فقط." });
+        const updates = req.body;
+        if ((updates.role === "branch" || updates.branch) && !(fallbackBranches.get(targetUser.tenantId || "") || []).includes(updates.branch)) return res.status(400).json({ error: "اختر فرعاً موجوداً في الشركة." });
+      }
       const isDev = (targetUser && targetUser.email === DEV_EMAIL) || uid === "user-admin";
       if (isDev) {
         return res.status(403).json({ error: "لا يمكن حذف حساب مطور البرنامج الرئيسي نهائياً!" });
@@ -1232,10 +1295,10 @@ app.get("/api/employees", requireAuth, async (req: any, res: any) => {
         kafalaStartMonth: r.kafala_start_month || undefined,
         kafalaStartYear: r.kafala_start_year || undefined,
       }));
-      return res.json(mapped);
+      return res.json(mapped.filter((row: any) => inBranch(req, row.branch)));
     }
     const filtered = fallbackEmployees.filter((e) => (tenantId ? e.tenantId === tenantId : !e.tenantId));
-    return res.json(filtered);
+    return res.json(filtered.filter((row: any) => inBranch(req, row.branch)));
   } catch (err: any) {
     sendServerError(res, err);
   }
@@ -1252,22 +1315,25 @@ app.post("/api/employees", requireAuth, async (req: any, res: any) => {
   const e = parseResult.data;
   const tenantId = getTenantId(req);
   try {
+    const existing = await findEmployee(tenantId, e.iqamaNo);
+    if (!inBranch(req, e.branch) || (existing && !inBranch(req, existing.branch))) return res.status(403).json({ error: "الموظف خارج نطاق فرعك." });
     if (pool) {
       // Cleaned PostgreSQL upsert
-      await runQuery(
+      const saved = await runQuery(
         `INSERT INTO employees (
           iqama_no, name, employee_id, iqama_expiry, mobile, branch, iqama_balance, 
           kafala_count, other_debt, other_debt_desc, notes, status, archive_reason, 
           archive_date, added_date, kafala_start_month, kafala_start_year, tenant_id
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT (iqama_no) DO UPDATE SET 
+        ON CONFLICT (tenant_id, iqama_no) DO UPDATE SET
           name=EXCLUDED.name, employee_id=EXCLUDED.employee_id, iqama_expiry=EXCLUDED.iqama_expiry, 
           mobile=EXCLUDED.mobile, branch=EXCLUDED.branch, iqama_balance=EXCLUDED.iqama_balance,
           kafala_count=EXCLUDED.kafala_count, other_debt=EXCLUDED.other_debt, 
           other_debt_desc=EXCLUDED.other_debt_desc, notes=EXCLUDED.notes, status=EXCLUDED.status, 
           archive_reason=EXCLUDED.archive_reason, archive_date=EXCLUDED.archive_date, 
           added_date=EXCLUDED.added_date, kafala_start_month=EXCLUDED.kafala_start_month, 
-          kafala_start_year=EXCLUDED.kafala_start_year`,
+          kafala_start_year=EXCLUDED.kafala_start_year
+          WHERE (? = 'admin' OR employees.branch = ?) RETURNING iqama_no`,
         [
           e.iqamaNo,
           e.name,
@@ -1286,13 +1352,14 @@ app.post("/api/employees", requireAuth, async (req: any, res: any) => {
           e.addedDate || new Date().toISOString(),
           e.kafalaStartMonth || null,
           e.kafalaStartYear || null,
-          tenantId || null
+          tenantId, req.user.role, req.user.branch || ""
         ]
       );
+      if (!saved.length) return res.status(403).json({ error: "الموظف خارج نطاق فرعك." });
       return res.json({ success: true, employee: e });
     } else {
       const fullEmp = { ...e, tenantId };
-      const existingIdx = fallbackEmployees.findIndex((item) => item.iqamaNo === e.iqamaNo);
+      const existingIdx = fallbackEmployees.findIndex((item) => item.iqamaNo === e.iqamaNo && (item.tenantId || "") === tenantId);
       if (existingIdx !== -1) {
         fallbackEmployees[existingIdx] = fullEmp;
       } else {
@@ -1312,9 +1379,18 @@ app.delete("/api/employees/:iqamaNo", requireAuth, async (req: any, res: any) =>
   const { iqamaNo } = req.params;
   const tenantId = getTenantId(req);
   try {
+    const employee = await findEmployee(tenantId, iqamaNo);
+    if (!employee) return res.status(404).json({ error: "الموظف غير موجود." });
+    if (!inBranch(req, employee.branch)) return res.status(403).json({ error: "الموظف خارج نطاق فرعك." });
     if (pool) {
-      await runQuery("DELETE FROM payments WHERE iqama_no = ? AND tenant_id = ?", [iqamaNo, tenantId]);
-      await runQuery("DELETE FROM employees WHERE iqama_no = ? AND tenant_id = ?", [iqamaNo, tenantId]);
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query("DELETE FROM payments WHERE iqama_no = $1 AND tenant_id = $2", [iqamaNo, tenantId]);
+        await client.query("DELETE FROM employees WHERE iqama_no = $1 AND tenant_id = $2", [iqamaNo, tenantId]);
+        await client.query("COMMIT");
+      } catch (error) { await client.query("ROLLBACK"); throw error; }
+      finally { client.release(); }
       return res.json({ success: true });
     } else {
       fallbackEmployees = fallbackEmployees.filter((e) => !(e.iqamaNo === iqamaNo && e.tenantId === tenantId));
@@ -1345,15 +1421,18 @@ app.get("/api/payments", requireAuth, async (req: any, res: any) => {
         branch: r.branch,
         amount: Number(r.amount || 0),
         type: r.type,
+        transactionKind: getPaymentKind({ type: r.type, transactionKind: r.transaction_kind }),
+        category: r.category || undefined, balanceIncluded: r.balance_included ?? true,
+        kafalaPeriod: r.kafala_period || undefined, cashAccount: r.cash_account || undefined,
         date: r.date ? r.date.toISOString().slice(0, 10) : "",
         notes: r.notes || undefined,
         hijriMonth: r.hijri_month || undefined,
         hijriYear: r.hijri_year || undefined,
       }));
-      return res.json(mapped);
+      return res.json(mapped.filter((row: any) => inBranch(req, row.branch)));
     }
     const filtered = fallbackPayments.filter((p) => (tenantId ? p.tenantId === tenantId : !p.tenantId));
-    return res.json(filtered);
+    return res.json(filtered.filter((row: any) => inBranch(req, row.branch)));
   } catch (err: any) {
     sendServerError(res, err);
   }
@@ -1367,17 +1446,27 @@ app.post("/api/payments", requireAuth, async (req: any, res: any) => {
   if (!parseResult.success) {
     return res.status(400).json({ error: formatZodError(parseResult.error) });
   }
-  const p = parseResult.data;
+  const p = { ...parseResult.data, transactionKind: getPaymentKind(parseResult.data) };
   const tenantId = getTenantId(req);
   try {
+    const employee = await findEmployee(tenantId, p.iqamaNo);
+    if (!employee) return res.status(404).json({ error: "الموظف غير موجود في الشركة." });
+    if (!inBranch(req, employee.branch)) return res.status(403).json({ error: "الموظف خارج نطاق فرعك." });
+    const existing = pool ? (await runQuery("SELECT * FROM payments WHERE tenant_id = ? AND id = ?", [tenantId, p.id]))[0]
+      : fallbackPayments.find(item => item.id === p.id && (item.tenantId || "") === tenantId);
+    if (existing && !inBranch(req, existing.branch)) return res.status(403).json({ error: "الدفعة خارج نطاق فرعك." });
+    if (existing && (existing.iqama_no || existing.iqamaNo) !== p.iqamaNo) return res.status(409).json({ error: "لا يمكن نقل الدفعة إلى موظف آخر." });
+    p.branch = employee.branch;
+    p.name = employee.name;
     if (pool) {
       // Cleaned PostgreSQL upsert
-      await runQuery(
-        `INSERT INTO payments (id, iqama_no, name, branch, amount, type, date, notes, hijri_month, hijri_year, tenant_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT (id) DO UPDATE SET 
+      const saved = await runQuery(
+        `INSERT INTO payments (id, iqama_no, name, branch, amount, type, date, notes, hijri_month, hijri_year, tenant_id, transaction_kind, category, balance_included, kafala_period, cash_account)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (tenant_id, id) DO UPDATE SET
            name=EXCLUDED.name, branch=EXCLUDED.branch, amount=EXCLUDED.amount, type=EXCLUDED.type, 
-           date=EXCLUDED.date, notes=EXCLUDED.notes, hijri_month=EXCLUDED.hijri_month, hijri_year=EXCLUDED.hijri_year`,
+           date=EXCLUDED.date, notes=EXCLUDED.notes, hijri_month=EXCLUDED.hijri_month, hijri_year=EXCLUDED.hijri_year, transaction_kind=EXCLUDED.transaction_kind, category=EXCLUDED.category, balance_included=EXCLUDED.balance_included, kafala_period=EXCLUDED.kafala_period, cash_account=EXCLUDED.cash_account
+           WHERE (? = 'admin' OR payments.branch = ?) AND payments.iqama_no = EXCLUDED.iqama_no RETURNING id`,
         [
           p.id,
           p.iqamaNo,
@@ -1389,13 +1478,14 @@ app.post("/api/payments", requireAuth, async (req: any, res: any) => {
           p.notes || null,
           p.hijriMonth || null,
           p.hijriYear || null,
-          tenantId || null
+          tenantId, p.transactionKind, p.category || null, p.balanceIncluded ?? true, p.kafalaPeriod ? JSON.stringify(p.kafalaPeriod) : null, p.cashAccount || 'cash', req.user.role, req.user.branch || ""
         ]
       );
+      if (!saved.length) return res.status(403).json({ error: "الدفعة خارج نطاق فرعك أو تخص موظفاً آخر." });
       return res.json({ success: true, payment: p });
     } else {
       const fullP = { ...p, tenantId };
-      const existingIdx = fallbackPayments.findIndex((item) => item.id === p.id);
+      const existingIdx = fallbackPayments.findIndex((item) => item.id === p.id && (item.tenantId || "") === tenantId);
       if (existingIdx !== -1) {
         fallbackPayments[existingIdx] = fullP;
       } else {
@@ -1409,8 +1499,90 @@ app.post("/api/payments", requireAuth, async (req: any, res: any) => {
 });
 
 
+app.delete("/api/payments/:id", requireAuth, async (req: any, res: any) => {
+  if (req.user.role === "viewer") return res.status(403).json({ error: "لا تملك صلاحية حذف المدفوعات." });
+  const tenantId = getTenantId(req);
+  try {
+    const payment = pool ? (await runQuery("SELECT * FROM payments WHERE tenant_id = ? AND id = ?", [tenantId, req.params.id]))[0]
+      : fallbackPayments.find(p => (p.tenantId || "") === tenantId && p.id === req.params.id);
+    if (!payment) return res.status(404).json({ error: "الدفعة غير موجودة." });
+    if (!inBranch(req, payment.branch)) return res.status(403).json({ error: "الدفعة خارج نطاق فرعك." });
+    if (pool) await runQuery("DELETE FROM payments WHERE tenant_id = ? AND id = ?", [tenantId, req.params.id]);
+    else fallbackPayments = fallbackPayments.filter(p => !((p.tenantId || "") === tenantId && p.id === req.params.id));
+    return res.json({ success: true });
+  } catch (err) { return sendServerError(res, err); }
+});
+
+const shopEntrySchema = z.object({
+  id: z.string().min(1).max(128), branch: z.string().min(1).max(150), date: dateSchema('الحركة'),
+  year: z.number().int().min(1900).max(2200), kind: z.enum(['charge', 'receipt', 'opening', 'discount']),
+  amount: positiveNumericSchema('المبلغ').refine(value => Math.abs(value * 100 - Math.round(value * 100)) < 0.000001, 'المبلغ يقبل منزلتين عشريتين فقط'),
+  category: z.string().min(1).max(150), description: z.string().min(1).max(4000),
+  reference: z.string().max(100).optional(), responsible: z.string().max(255).optional(), notes: z.string().max(4000).optional(),
+  paidByCompany: z.boolean().optional().default(false), cashAccount: z.enum(['cash', 'bank']).optional().default('cash')
+}).refine(entry => !entry.paidByCompany || entry.kind === 'charge', { message: 'الدفع من الشركة يخص المصروف المحمل على المسؤول فقط.' });
+
+const mapShopEntry = (row: any) => ({ id: row.id, branch: row.branch, date: row.date instanceof Date ? row.date.toISOString().slice(0,10) : String(row.date).slice(0,10), year: row.year, kind: row.kind, amount: Number(row.amount), category: row.category, description: row.description, reference: row.reference || '', responsible: row.responsible || '', notes: row.notes || '', paidByCompany: row.paid_by_company, cashAccount: row.cash_account, createdAt: row.created_at });
+
+app.get('/api/shop-entries', requireAuth, async (req: any, res) => {
+  if (req.user.role === 'viewer' && !(req.company?.allow_ledger_for_users || req.company?.allowLedgerForUsers)) return res.status(403).json({ error: 'الوصول لحسابات المحلات غير مسموح.' });
+  const tenantId = getTenantId(req);
+  try {
+    const entries = pool ? (await runQuery("SELECT * FROM shop_entries WHERE tenant_id = ? ORDER BY date, created_at, id", [tenantId])).map(mapShopEntry) : fallbackShopEntries.filter(entry => entry.tenantId === tenantId);
+    return res.json(entries.filter((entry: any) => inBranch(req, entry.branch)));
+  } catch (error) { return sendServerError(res, error); }
+});
+
+app.post('/api/shop-entries', requireAuth, requireAdmin, async (req: any, res) => {
+  const parsed = shopEntrySchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: formatZodError(parsed.error) });
+  const entry = parsed.data, tenantId = getTenantId(req);
+  try {
+    const branches = pool ? (await runQuery('SELECT name FROM branches WHERE tenant_id = ? AND name = ?', [tenantId, entry.branch])).length > 0 : (fallbackBranches.get(tenantId) || []).includes(entry.branch);
+    if (!branches) return res.status(400).json({ error: 'اختر فرعاً تابعاً لشركتك.' });
+    if (pool) {
+      const rows = await runQuery(`INSERT INTO shop_entries (tenant_id, id, branch, date, year, kind, amount, category, description, reference, responsible, notes, paid_by_company, cash_account)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (tenant_id, id) DO NOTHING RETURNING *`,
+        [tenantId, entry.id, entry.branch, entry.date, entry.year, entry.kind, entry.amount, entry.category, entry.description, entry.reference || null, entry.responsible || null, entry.notes || null, entry.paidByCompany, entry.cashAccount]);
+      if (!rows.length) {
+        const existing = mapShopEntry((await runQuery('SELECT * FROM shop_entries WHERE tenant_id = ? AND id = ?', [tenantId, entry.id]))[0]);
+        if (existing.branch !== entry.branch || existing.amount !== entry.amount || existing.kind !== entry.kind || existing.date !== entry.date || existing.description !== entry.description || existing.category !== entry.category || existing.year !== entry.year || existing.reference !== (entry.reference || '') || existing.notes !== (entry.notes || '') || existing.responsible !== (entry.responsible || '') || existing.paidByCompany !== entry.paidByCompany || existing.cashAccount !== entry.cashAccount) return res.status(409).json({ error: 'رقم الحركة مستخدم بحركة مختلفة.' });
+        return res.json({ success: true, entry: existing });
+      }
+      return res.status(201).json({ success: true, entry: mapShopEntry(rows[0]) });
+    }
+    const existing = fallbackShopEntries.find(item => item.tenantId === tenantId && item.id === entry.id);
+    if (existing) {
+      if (Object.keys(entry).some(key => existing[key] !== entry[key])) return res.status(409).json({ error: 'رقم الحركة مستخدم بحركة مختلفة.' });
+      return res.json({ success: true, entry: existing });
+    }
+    if (entry.reference && fallbackShopEntries.some(item => item.tenantId === tenantId && item.branch === entry.branch && item.reference === entry.reference)) return res.status(409).json({ error: 'مرجع المستند موجود لهذا الفرع بالفعل.' });
+    const saved = { ...entry, tenantId, createdAt: new Date().toISOString() };
+    fallbackShopEntries.push(saved);
+    return res.status(201).json({ success: true, entry: saved });
+  } catch (error: any) {
+    if (error.code === '23505') return res.status(409).json({ error: 'مرجع المستند موجود لهذا الفرع بالفعل.' });
+    return sendServerError(res, error);
+  }
+});
+
+app.delete('/api/shop-entries/:id', requireAuth, requireAdmin, async (req: any, res) => {
+  const tenantId = getTenantId(req);
+  try {
+    if (pool) {
+      const deleted = await runQuery('DELETE FROM shop_entries WHERE tenant_id = ? AND id = ? RETURNING id', [tenantId, req.params.id]);
+      if (!deleted.length) return res.status(404).json({ error: 'الحركة غير موجودة في الشركة.' });
+    } else {
+      const entry = fallbackShopEntries.find(item => item.tenantId === tenantId && item.id === req.params.id);
+      if (!entry) return res.status(404).json({ error: 'الحركة غير موجودة في الشركة.' });
+      fallbackShopEntries = fallbackShopEntries.filter(item => !(item.tenantId === tenantId && item.id === req.params.id));
+    }
+    return res.json({ success: true });
+  } catch (error) { return sendServerError(res, error); }
+});
+
 // 3.5 General Ledger API
-app.get("/api/general-ledger", requireAuth, async (req: any, res: any) => {
+app.get("/api/general-ledger", requireAuth, requireLedger, async (req: any, res: any) => {
   const tenantId = getTenantId(req);
   try {
     if (pool) {
@@ -1421,7 +1593,8 @@ app.get("/api/general-ledger", requireAuth, async (req: any, res: any) => {
         rows = await runQuery("SELECT * FROM general_ledger WHERE tenant_id IS NULL OR tenant_id = '' ORDER BY date DESC, created_at DESC");
       }
       const mapped = rows.map((r: any) => ({
-        id: r.id,
+        id: r.id, branch: r.branch || '', category: r.category || '', reference: r.reference || '',
+        cashAccount: r.cash_account || undefined, counterpartAccount: r.counterpart_account || '',
         date: r.date ? (r.date instanceof Date ? r.date.toISOString().slice(0, 10) : String(r.date).slice(0, 10)) : "",
         bayan: r.bayan,
         debit: Number(r.debit || 0),
@@ -1429,16 +1602,16 @@ app.get("/api/general-ledger", requireAuth, async (req: any, res: any) => {
         createdAt: r.created_at,
         tenantId: r.tenant_id
       }));
-      return res.json(mapped);
+      return res.json(mapped.filter((entry: any) => inBranch(req, entry.branch)));
     }
     const filtered = fallbackGeneralLedger.filter((item) => (tenantId ? item.tenantId === tenantId : !item.tenantId));
-    return res.json(filtered);
+    return res.json(filtered.filter((entry: any) => inBranch(req, entry.branch)));
   } catch (err: any) {
     sendServerError(res, err);
   }
 });
 
-app.post("/api/general-ledger", requireAuth, async (req: any, res: any) => {
+app.post("/api/general-ledger", requireAuth, requireLedger, requireAdmin, async (req: any, res: any) => {
   if (req.user.role === 'viewer') {
     return res.status(403).json({ error: "لا تملك صلاحية تعديل أو إضافة قيود عامة." });
   }
@@ -1449,26 +1622,30 @@ app.post("/api/general-ledger", requireAuth, async (req: any, res: any) => {
   const item = parseResult.data;
   const tenantId = getTenantId(req);
   try {
+    if (item.branch) {
+      const owned = pool ? (await runQuery("SELECT name FROM branches WHERE tenant_id = ? AND name = ?", [tenantId, item.branch])).length > 0 : (fallbackBranches.get(tenantId) || []).includes(item.branch);
+      if (!owned) return res.status(400).json({ error: "الفرع غير موجود في الشركة." });
+    }
     if (pool) {
       await runQuery(
-        `INSERT INTO general_ledger (id, date, bayan, debit, credit, tenant_id, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT (id) DO UPDATE SET 
-           date=EXCLUDED.date, bayan=EXCLUDED.bayan, debit=EXCLUDED.debit, credit=EXCLUDED.credit`,
+        `INSERT INTO general_ledger (id, date, bayan, debit, credit, tenant_id, created_at, branch, category, reference, cash_account, counterpart_account)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (tenant_id, id) DO UPDATE SET
+           date=EXCLUDED.date, bayan=EXCLUDED.bayan, debit=EXCLUDED.debit, credit=EXCLUDED.credit, branch=EXCLUDED.branch, category=EXCLUDED.category, reference=EXCLUDED.reference, cash_account=EXCLUDED.cash_account, counterpart_account=EXCLUDED.counterpart_account`,
         [
           item.id,
           item.date,
           item.bayan,
           item.debit || 0,
           item.credit || 0,
-          tenantId || null,
-          item.createdAt || new Date().toISOString()
+          tenantId,
+          item.createdAt || new Date().toISOString(), item.branch || null, item.category || null, item.reference || null, item.cashAccount || "cash", item.counterpartAccount || null
         ]
       );
       return res.json({ success: true, entry: item });
     } else {
       const fullItem = { ...item, tenantId };
-      const existingIdx = fallbackGeneralLedger.findIndex((g) => g.id === item.id);
+      const existingIdx = fallbackGeneralLedger.findIndex((g) => g.id === item.id && (g.tenantId || "") === tenantId);
       if (existingIdx !== -1) {
         fallbackGeneralLedger[existingIdx] = fullItem;
       } else {
@@ -1481,7 +1658,7 @@ app.post("/api/general-ledger", requireAuth, async (req: any, res: any) => {
   }
 });
 
-app.delete("/api/general-ledger/:id", requireAuth, async (req: any, res: any) => {
+app.delete("/api/general-ledger/:id", requireAuth, requireLedger, requireAdmin, async (req: any, res: any) => {
   if (req.user.role === 'viewer') {
     return res.status(403).json({ error: "لا تملك صلاحية حذف القيود العامة." });
   }
@@ -1626,15 +1803,27 @@ app.get("/api/branches", requireAuth, async (req: any, res: any) => {
   try {
     if (pool) {
       const rows = await runQuery("SELECT name FROM branches WHERE tenant_id = ? ORDER BY name ASC", [tenantId]);
-      return res.json(rows.map((r: any) => r.name));
+      return res.json(rows.map((r: any) => r.name).filter((branch: string) => inBranch(req, branch)));
     }
-    return res.json(fallbackBranches.get(tenantId) || []);
+    return res.json((fallbackBranches.get(tenantId) || []).filter(branch => inBranch(req, branch)));
   } catch (err: any) {
     sendServerError(res, err);
   }
 });
 
-app.post("/api/branches", requireAuth, async (req: any, res: any) => {
+async function branchesWithRecords(tenantId: string): Promise<Set<string>> {
+  if (pool) {
+    const rows = await runQuery(`SELECT branch FROM employees WHERE tenant_id = ?
+      UNION SELECT branch FROM payments WHERE tenant_id = ?
+      UNION SELECT branch FROM shop_entries WHERE tenant_id = ?
+      UNION SELECT branch FROM general_ledger WHERE tenant_id = ?`, [tenantId, tenantId, tenantId, tenantId]);
+    return new Set(rows.map((row: any) => row.branch).filter(Boolean));
+  }
+  return new Set([...fallbackEmployees, ...fallbackPayments, ...fallbackShopEntries, ...fallbackGeneralLedger]
+    .filter(item => (item.tenantId || '') === tenantId).map(item => item.branch).filter(Boolean));
+}
+
+app.post("/api/branches", requireAuth, requireAdmin, async (req: any, res: any) => {
   if (req.user.role === 'viewer') {
     return res.status(403).json({ error: "لا تملك صلاحية تعديل الفروع." });
   }
@@ -1647,6 +1836,8 @@ app.post("/api/branches", requireAuth, async (req: any, res: any) => {
   try {
     if (Array.isArray(bodyData)) {
       const names = bodyData.map(item => typeof item === 'string' ? item : item?.name).filter(Boolean);
+      const protectedBranches = await branchesWithRecords(tenantId);
+      if ([...protectedBranches].some(name => !names.includes(name))) return res.status(409).json({ error: 'لا يمكن حذف فرع له عمالة أو حركات مالية. احتفظ به لحماية كشف الحساب.' });
       if (pool) {
         if (names.length > 0) {
           const placeholders = names.map(() => '?').join(', ');
@@ -1682,13 +1873,14 @@ app.post("/api/branches", requireAuth, async (req: any, res: any) => {
   }
 });
 
-app.delete("/api/branches/:name", requireAuth, async (req: any, res: any) => {
+app.delete("/api/branches/:name", requireAuth, requireAdmin, async (req: any, res: any) => {
   if (req.user.role === 'viewer') {
     return res.status(403).json({ error: "لا تملك صلاحية حذف الفروع." });
   }
   const { name } = req.params;
   const tenantId = getTenantId(req);
   try {
+    if ((await branchesWithRecords(tenantId)).has(name)) return res.status(409).json({ error: "لا يمكن حذف فرع له عمالة أو حركات مالية." });
     if (pool) {
       await runQuery("DELETE FROM branches WHERE name = ? AND tenant_id = ?", [name, tenantId]);
       return res.json({ success: true });
@@ -1704,7 +1896,7 @@ app.delete("/api/branches/:name", requireAuth, async (req: any, res: any) => {
 
 
 // 7. Activity Logs API
-app.get("/api/logs", requireAuth, async (req: any, res: any) => {
+app.get("/api/logs", requireAuth, requireAdmin, async (req: any, res: any) => {
   const tenantId = getTenantId(req);
   try {
     if (pool) {
@@ -1712,7 +1904,7 @@ app.get("/api/logs", requireAuth, async (req: any, res: any) => {
       if (tenantId) {
         rows = await runQuery('SELECT * FROM activity_logs WHERE tenant_id = ? ORDER BY time DESC LIMIT 200', [tenantId]);
       } else {
-        rows = await runQuery('SELECT * FROM activity_logs ORDER BY time DESC LIMIT 200');
+        rows = await runQuery("SELECT * FROM activity_logs WHERE COALESCE(tenant_id, '') = '' ORDER BY time DESC LIMIT 200");
       }
       const mapped = rows.map((r: any) => ({
         id: r.id,
@@ -1723,7 +1915,7 @@ app.get("/api/logs", requireAuth, async (req: any, res: any) => {
       }));
       return res.json(mapped);
     }
-    const filtered = fallbackLogs.filter((l) => (tenantId ? l.tenantId === tenantId : true));
+    const filtered = fallbackLogs.filter((l) => (tenantId ? l.tenantId === tenantId : !l.tenantId));
     return res.json(filtered);
   } catch (err: any) {
     sendServerError(res, err);
@@ -1735,7 +1927,7 @@ app.post("/api/logs", requireAuth, async (req: any, res: any) => {
   if (!parseResult.success) {
     return res.status(400).json({ error: formatZodError(parseResult.error) });
   }
-  const l = parseResult.data;
+  const l = { ...parseResult.data, user: req.user.name, time: new Date().toISOString() };
   const tenantId = getTenantId(req);
   try {
     if (pool) {
@@ -1753,6 +1945,15 @@ app.post("/api/logs", requireAuth, async (req: any, res: any) => {
   }
 });
 
+
+app.delete("/api/logs", requireAuth, requireAdmin, async (req: any, res: any) => {
+  const tenantId = getTenantId(req);
+  try {
+    if (pool) await runQuery("DELETE FROM activity_logs WHERE COALESCE(tenant_id, '') = ?", [tenantId]);
+    else fallbackLogs = fallbackLogs.filter(log => (log.tenantId || "") !== tenantId);
+    return res.json({ success: true });
+  } catch (err) { return sendServerError(res, err); }
+});
 
 // 8. General Wipe/Reset database API
 app.post("/api/system/wipe", requireAuth, async (req: any, res: any) => {
@@ -1773,19 +1974,15 @@ app.post("/api/system/wipe", requireAuth, async (req: any, res: any) => {
 
   try {
     if (pool) {
-      if (tenantId) {
-        await runQuery("DELETE FROM payments WHERE tenant_id = ?", [tenantId]);
-        await runQuery("DELETE FROM employees WHERE tenant_id = ?", [tenantId]);
-        await runQuery("DELETE FROM activity_logs WHERE tenant_id = ?", [tenantId]);
-        await runQuery("DELETE FROM general_ledger WHERE tenant_id = ?", [tenantId]);
-        await runQuery("DELETE FROM branches WHERE tenant_id = ?", [tenantId]);
-      } else {
-        await runQuery("DELETE FROM payments");
-        await runQuery("DELETE FROM employees");
-        await runQuery("DELETE FROM activity_logs");
-        await runQuery("DELETE FROM general_ledger");
-        await runQuery("DELETE FROM branches");
-      }
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        for (const table of ["payments", "employees", "activity_logs", "general_ledger", "shop_entries", "branches"]) {
+          await client.query(`DELETE FROM ${table} WHERE COALESCE(tenant_id, '') = $1`, [tenantId]);
+        }
+        await client.query("COMMIT");
+      } catch (error) { await client.query("ROLLBACK"); throw error; }
+      finally { client.release(); }
       return res.json({ success: true });
     } else {
       if (tenantId) {
@@ -1793,13 +1990,15 @@ app.post("/api/system/wipe", requireAuth, async (req: any, res: any) => {
         fallbackPayments = fallbackPayments.filter((p) => p.tenantId !== tenantId);
         fallbackLogs = fallbackLogs.filter((l) => l.tenantId !== tenantId);
         fallbackGeneralLedger = fallbackGeneralLedger.filter((g) => g.tenantId !== tenantId);
+        fallbackShopEntries = fallbackShopEntries.filter(e => e.tenantId !== tenantId);
         fallbackBranches.delete(tenantId);
       } else {
-        fallbackEmployees = [];
-        fallbackPayments = [];
-        fallbackLogs = [];
-        fallbackGeneralLedger = [];
-        fallbackBranches.clear();
+        fallbackEmployees = fallbackEmployees.filter(e => !!e.tenantId);
+        fallbackPayments = fallbackPayments.filter(p => !!p.tenantId);
+        fallbackLogs = fallbackLogs.filter(l => !!l.tenantId);
+        fallbackGeneralLedger = fallbackGeneralLedger.filter(g => !!g.tenantId);
+        fallbackShopEntries = fallbackShopEntries.filter(e => !!e.tenantId);
+        fallbackBranches.delete("");
       }
       return res.json({ success: true });
     }
@@ -1864,11 +2063,19 @@ app.post("/api/admin/spaces", requireAuth, requireDev, async (req: any, res: any
   }
   const { adminName, adminEmail, adminPassword, companyName, tenantId, action, activationDate, expirationDate, supportPhone } = parseResult.data;
 
-  if (adminPassword && !adminPassword.startsWith("$2a$") && !adminPassword.startsWith("$2b$") && adminPassword.length < 8) {
+  if (adminPassword && (adminPassword.length < 8 || Buffer.byteLength(adminPassword, "utf8") > 72 || /^\$2[aby]\$/.test(adminPassword))) {
     return res.status(400).json({ error: "كلمة مرور المدير: يجب ألا تقل عن 8 أحرف." });
   }
 
   try {
+  if (action === "create_space" || action === "add_user_to_company" || !action) {
+    if (!adminName?.trim() || !adminEmail || !z.string().email().safeParse(adminEmail).success || !adminPassword || (!companyName?.trim() && action !== "add_user_to_company") || isDevEmail(adminEmail)) {
+      return res.status(400).json({ error: "أدخل اسم المدير وبريده وكلمة مروره واسم الشركة." });
+    }
+    const exists = pool ? (await runQuery("SELECT uid FROM users WHERE LOWER(TRIM(email)) = ?", [adminEmail.toLowerCase().trim()])).length > 0 : fallbackUsers.some(u => u.email.toLowerCase().trim() === adminEmail.toLowerCase().trim());
+    if (exists) return res.status(409).json({ error: "البريد الإلكتروني مسجّل بالفعل." });
+  } else if (!tenantId) return res.status(400).json({ error: "حدد الشركة أولاً." });
+
     if (pool) {
       if (action === "edit_company") {
         await runQuery(
@@ -1892,7 +2099,7 @@ app.post("/api/admin/spaces", requireAuth, requireDev, async (req: any, res: any
         }
 
         let baseDate = new Date();
-        if (currentExp && !isNaN(Date.parse(currentExp))) {
+        if (currentExp && !isNaN(Date.parse(currentExp)) && new Date(currentExp) > baseDate) {
           baseDate = new Date(currentExp);
         }
         baseDate.setFullYear(baseDate.getFullYear() + 1);
@@ -1917,7 +2124,7 @@ app.post("/api/admin/spaces", requireAuth, requireDev, async (req: any, res: any
         }
         const newUid = `user_${crypto.randomUUID()}`;
         let addUserPassword = adminPassword || null;
-        if (addUserPassword && !addUserPassword.startsWith("$2a$") && !addUserPassword.startsWith("$2b$")) {
+        if (addUserPassword) {
           addUserPassword = await bcrypt.hash(addUserPassword, 10);
         }
         await runQuery(
@@ -1935,21 +2142,26 @@ app.post("/api/admin/spaces", requireAuth, requireDev, async (req: any, res: any
       const sPhone = supportPhone || "";
 
       let adminPasswordToSave = adminPassword || null;
-      if (adminPasswordToSave && !adminPasswordToSave.startsWith("$2a$") && !adminPasswordToSave.startsWith("$2b$")) {
+      if (adminPasswordToSave) {
         adminPasswordToSave = await bcrypt.hash(adminPasswordToSave, 10);
       }
 
-      await runQuery(
-        `INSERT INTO users (uid, name, email, role, branch, status, tenant_id, password, created_at)
-         VALUES (?, ?, ?, 'admin', NULL, 'approved', ?, ?, ?)`,
-        [newUid, adminName, adminEmail, newTenantId, adminPasswordToSave, new Date().toISOString()]
-      );
-
-      await runQuery(
-        `INSERT INTO company_settings (tenant_id, name, logo_base64, allow_ledger_for_users, activation_date, expiration_date, support_phone)
-         VALUES (?, ?, NULL, FALSE, ?, ?, ?)`,
-        [newTenantId, companyName, actDate, expDate, sPhone]
-      );
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query(
+          `INSERT INTO users (uid, name, email, role, branch, status, tenant_id, password, created_at)
+           VALUES ($1, $2, $3, 'admin', NULL, 'approved', $4, $5, $6)`,
+          [newUid, adminName, adminEmail.trim().toLowerCase(), newTenantId, adminPasswordToSave, new Date().toISOString()]
+        );
+        await client.query(
+          `INSERT INTO company_settings (tenant_id, name, logo_base64, allow_ledger_for_users, activation_date, expiration_date, support_phone)
+           VALUES ($1, $2, NULL, FALSE, $3, $4, $5)`,
+          [newTenantId, companyName, actDate, expDate, sPhone]
+        );
+        await client.query("COMMIT");
+      } catch (error) { await client.query("ROLLBACK"); throw error; }
+      finally { client.release(); }
       
       return res.json({ success: true, tenantId: newTenantId });
     } else {
@@ -1970,7 +2182,7 @@ app.post("/api/admin/spaces", requireAuth, requireDev, async (req: any, res: any
         let currentExp = existing.expirationDate || "";
 
         let baseDate = new Date();
-        if (currentExp && !isNaN(Date.parse(currentExp))) {
+        if (currentExp && !isNaN(Date.parse(currentExp)) && new Date(currentExp) > baseDate) {
           baseDate = new Date(currentExp);
         }
         baseDate.setFullYear(baseDate.getFullYear() + 1);
@@ -1992,7 +2204,7 @@ app.post("/api/admin/spaces", requireAuth, requireDev, async (req: any, res: any
         }
         const newUid = `user_${crypto.randomUUID()}`;
         let addUserPassword = adminPassword || null;
-        if (addUserPassword && !addUserPassword.startsWith("$2a$") && !addUserPassword.startsWith("$2b$")) {
+        if (addUserPassword) {
           addUserPassword = await bcrypt.hash(addUserPassword, 10);
         }
         fallbackUsers.push({
@@ -2015,7 +2227,7 @@ app.post("/api/admin/spaces", requireAuth, requireDev, async (req: any, res: any
       const sPhone = supportPhone || "";
       
       let adminPasswordToSave = adminPassword || null;
-      if (adminPasswordToSave && !adminPasswordToSave.startsWith("$2a$") && !adminPasswordToSave.startsWith("$2b$")) {
+      if (adminPasswordToSave) {
         adminPasswordToSave = await bcrypt.hash(adminPasswordToSave, 10);
       }
 
@@ -2048,13 +2260,10 @@ app.post("/api/admin/spaces", requireAuth, requireDev, async (req: any, res: any
 
 // Initialize database and start server
 async function startServer() {
-  connectDB()
-    .then(() => {
-      return initializeTables();
-    })
-    .catch((err) => {
-      console.error("❌ Error in background database initialization:", err);
-    });
+  await connectDB();
+  if (!pool && !allowMemoryFallback) throw new Error("PostgreSQL is required. Refusing temporary storage.");
+  await initializeTables();
+  databaseReady = true;
 
   // Vite Integration
   if (process.env.NODE_ENV !== "production") {
@@ -2071,9 +2280,23 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  const httpServer = app.listen(PORT, process.env.BIND_HOST || "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
+  let stopping = false;
+  const shutdown = async () => {
+    if (stopping) return;
+    stopping = true;
+    databaseReady = false;
+    const timeout = setTimeout(() => process.exit(1), 10000);
+    timeout.unref();
+    await new Promise<void>(resolve => httpServer.close(() => resolve()));
+    if (pool) await pool.end();
+    clearTimeout(timeout);
+    process.exit(0);
+  };
+  process.on("SIGTERM", () => { void shutdown(); });
+  process.on("SIGINT", () => { void shutdown(); });
 }
 
-startServer();
+startServer().catch(error => { console.error("Startup failed:", error.message); process.exit(1); });
