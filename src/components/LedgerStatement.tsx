@@ -1,4 +1,4 @@
-import { lastPaidKafala, formatHijriPeriod } from '../utils/accounting';
+import { lastPaidKafala, lastCalculatedKafala, formatHijriPeriod } from '../utils/accounting';
 import { isCashReceipt, isDebt as isDebtEntry, getPaymentKind, PAYMENT_KIND_LABELS } from '../utils/paymentKind';
 import { escapeHtml, printLogo } from '../utils/printSafety';
 import React, { useState, useEffect } from 'react';
@@ -74,6 +74,7 @@ export default function LedgerStatement({
   const ramadanPays = kafalaPays.filter(p => p.hijriMonth && parseInt(p.hijriMonth, 10) === 9);
 
   // Determine last paid month text
+  const lastCalculatedMonthText = lastCalculatedKafala(empPayments);
   const lastPaidMonthText = lastPaidKafala(empPayments);
 
   // Pre-calculate estimate remaining months
@@ -407,7 +408,9 @@ export default function LedgerStatement({
             </div>
           </div>
           <div class="stat-card" style="border-right: 4px solid #0d5189;">
-            <div class="label">آخر شهر كفالة سُجل له تحصيل</div>
+            <div class="label">آخر شهر كفالة محسوب</div>
+            <div class="value" style="font-size:12px;">${escapeHtml(lastCalculatedMonthText)}</div>
+            <div class="label" style="margin-top:8px;">آخر شهر كفالة سُجل له تحصيل</div>
             <div class="value" style="font-size:12px;">${escapeHtml(lastPaidMonthText)}</div>
           </div>
         </div>
@@ -534,6 +537,8 @@ export default function LedgerStatement({
         </div>
 
         <div className="bg-primary/5 border border-primary/10 rounded-2xl p-4 text-center">
+          <span className="text-xs text-slate-500 block mb-1">آخر شهر كفالة محسوب</span>
+          <span className="text-sm font-bold text-primary block mb-3">{lastCalculatedMonthText}</span>
           <span className="text-xs text-slate-400 block mb-1">آخر شهر سُجل له تحصيل كفالة</span>
           <span className="text-sm font-bold text-primary block mt-1.5">{lastPaidMonthText}</span>
         </div>
