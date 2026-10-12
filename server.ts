@@ -207,6 +207,7 @@ const paymentSchema = z.object({
 });
 
 const generalLedgerSchema = z.object({
+  cashEffect: z.enum(["cash", "noncash"]).optional(),
   branch: z.string().max(150).optional(), category: z.string().max(150).optional(), reference: z.string().max(100).optional(),
   cashAccount: z.enum(["cash", "bank"]).optional(), counterpartAccount: z.string().max(150).optional(),
   id: z.string().min(1, "المعرف مطلوب"),
@@ -796,7 +797,7 @@ async function initializeTables() {
     await client.query(`ALTER TABLE general_ledger
       ADD COLUMN IF NOT EXISTS branch VARCHAR(150), ADD COLUMN IF NOT EXISTS category VARCHAR(150),
       ADD COLUMN IF NOT EXISTS reference VARCHAR(100), ADD COLUMN IF NOT EXISTS cash_account VARCHAR(10),
-      ADD COLUMN IF NOT EXISTS counterpart_account VARCHAR(150)`);
+      ADD COLUMN IF NOT EXISTS counterpart_account VARCHAR(150), ADD COLUMN IF NOT EXISTS cash_effect VARCHAR(10)`);
     await client.query(`CREATE TABLE IF NOT EXISTS shop_entries (
       tenant_id VARCHAR(128) NOT NULL DEFAULT '', id VARCHAR(128) NOT NULL,
       branch VARCHAR(150) NOT NULL, date DATE NOT NULL, year INTEGER NOT NULL,
@@ -1597,7 +1598,7 @@ app.get("/api/general-ledger", requireAuth, requireLedger, async (req: any, res:
       }
       const mapped = rows.map((r: any) => ({
         id: r.id, branch: r.branch || '', category: r.category || '', reference: r.reference || '',
-        cashAccount: r.cash_account || undefined, counterpartAccount: r.counterpart_account || '',
+        cashAccount: r.cash_account || undefined, counterpartAccount: r.counterpart_account || '', cashEffect: r.cash_effect || undefined,
         date: r.date ? (r.date instanceof Date ? r.date.toISOString().slice(0, 10) : String(r.date).slice(0, 10)) : "",
         bayan: r.bayan,
         debit: Number(r.debit || 0),
@@ -1631,10 +1632,10 @@ app.post("/api/general-ledger", requireAuth, requireLedger, requireAdmin, async 
     }
     if (pool) {
       await runQuery(
-        `INSERT INTO general_ledger (id, date, bayan, debit, credit, tenant_id, created_at, branch, category, reference, cash_account, counterpart_account)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO general_ledger (id, date, bayan, debit, credit, tenant_id, created_at, branch, category, reference, cash_account, counterpart_account, cash_effect)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (tenant_id, id) DO UPDATE SET
-           date=EXCLUDED.date, bayan=EXCLUDED.bayan, debit=EXCLUDED.debit, credit=EXCLUDED.credit, branch=EXCLUDED.branch, category=EXCLUDED.category, reference=EXCLUDED.reference, cash_account=EXCLUDED.cash_account, counterpart_account=EXCLUDED.counterpart_account`,
+           date=EXCLUDED.date, bayan=EXCLUDED.bayan, debit=EXCLUDED.debit, credit=EXCLUDED.credit, branch=EXCLUDED.branch, category=EXCLUDED.category, reference=EXCLUDED.reference, cash_account=EXCLUDED.cash_account, counterpart_account=EXCLUDED.counterpart_account, cash_effect=COALESCE(EXCLUDED.cash_effect, general_ledger.cash_effect)`,
         [
           item.id,
           item.date,
@@ -1642,7 +1643,7 @@ app.post("/api/general-ledger", requireAuth, requireLedger, requireAdmin, async 
           item.debit || 0,
           item.credit || 0,
           tenantId,
-          item.createdAt || new Date().toISOString(), item.branch || null, item.category || null, item.reference || null, item.cashAccount || "cash", item.counterpartAccount || null
+          item.createdAt || new Date().toISOString(), item.branch || null, item.category || null, item.reference || null, item.cashAccount || "cash", item.counterpartAccount || null, item.cashEffect || null
         ]
       );
       return res.json({ success: true, entry: item });

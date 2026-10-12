@@ -72,3 +72,10 @@ test('cashbook reconciles source totals and carryforward using halalas without i
   assert.equal(summary.sources.find(row=>row.source==='manual')?.net,0);
   assert.equal(cashbookSummary([{...sample,date:'2026-01-01',receipt:0,payment:81503}]).ending,-81503);
 });
+
+
+test('explicit non-cash manual adjustments remain stored but never enter cash or journal', () => {
+  const entries = [{ id:'noncash', date:'2026-01-01', bayan:'Approved waiver', debit:25, credit:0, cashEffect:'noncash' as const }, {id:'cash',date:'2026-01-01',bayan:'Actual receipt',debit:0,credit:25}];
+  const cash = cashTransactions([],entries,[]);
+  assert.equal(cash.length,1); assert.equal(cash[0].receipt,25); assert.equal(entries.length,2);
+});

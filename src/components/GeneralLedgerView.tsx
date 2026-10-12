@@ -78,6 +78,7 @@ export default function GeneralLedgerView({ payments, currentUser, companyName, 
       <p className="text-sm mt-3">{money(opening)} + {money(totalReceived)} − {money(totalPaid)} = {money(balance)} ريال</p>
       {balance < 0 && <p className="mt-3 text-sm text-amber-900">الرصيد المحسوب سالب. راجع سندات الصرف والتحصيل والرصيد الافتتاحي؛ لا تنشئ سندًا لتصفير الفرق قبل مطابقة الحركات.</p>}
     </details>
+    {manual.some(entry => entry.cashEffect==='noncash') && <details className="accounting-panel"><summary className="cursor-pointer font-bold">سندات غير نقدية مستبعدة من رصيد الصندوق</summary><p className="text-sm text-slate-600 my-3">هذه السجلات محفوظة، ولا تدخل المقبوضات أو المدفوعات. يعرض الجدول السندات غير النقدية ضمن الفرع والفترة؛ فلاتر الحساب النقدي لا تنطبق عليها.</p><div className="overflow-x-auto"><table className="accounting-table"><thead><tr><th>التاريخ</th><th>البيان</th><th>مدين</th><th>دائن</th></tr></thead><tbody>{manual.filter(entry=>entry.cashEffect==='noncash' && (!branch || entry.branch===branch) && (!from || entry.date>=from) && (!to || entry.date<=to)).map(entry=><tr key={entry.id}><td>{entry.date}</td><td>{entry.bayan}</td><td>{money(entry.debit)}</td><td>{money(entry.credit)}</td></tr>)}</tbody></table></div></details>}
     {formOpen && <form onSubmit={save} className="accounting-panel space-y-4" aria-busy={busy}>
       <h3 className="font-bold text-lg">سند نقدية جديد</h3>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">

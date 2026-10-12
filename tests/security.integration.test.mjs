@@ -167,6 +167,15 @@ test('PostgreSQL-backed ownership, authentication and persistence', { timeout: 9
     assert.equal((await api('/api/general-ledger', 'GET', undefined, branch.token)).some(item => item.id === entry.id),false);
     await api('/api/general-ledger', 'POST', { ...entry, id: 'invalid-branch', branch: 'Outside' }, adminA, 400);
   });
+  await t.test('manual non-cash metadata persists without altering its historical amounts', async () => {
+    const entry = { id:'waiver-ledger', date:'2026-10-01', bayan:'Approved non-cash adjustment', debit:25, credit:0, cashEffect:'noncash' };
+    await api('/api/general-ledger','POST',entry,adminA);
+    const saved = (await api('/api/general-ledger','GET',undefined,adminA)).find(row=>row.id===entry.id);
+    assert.equal(saved.cashEffect,'noncash'); assert.equal(saved.debit,25);
+    const {cashEffect,...legacyUpdate}=entry;
+    await api('/api/general-ledger','POST',legacyUpdate,adminA);
+    assert.equal((await api('/api/general-ledger','GET',undefined,adminA)).find(row=>row.id===entry.id).cashEffect,'noncash');
+  });
   await t.test('payment deletion persists and does not delete same ID in another tenant', async () => {
     await api('/api/payments/shared-payment', 'DELETE', undefined, viewer.token, 403);
     await api('/api/payments/shared-payment', 'DELETE', undefined, branch.token);
