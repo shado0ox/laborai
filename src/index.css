@@ -138,3 +138,11 @@ select { background-color: white; color: var(--ink); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
+
+.employee-actions-menu { position: fixed; z-index: 65; width: 260px; max-height: min(410px,calc(100dvh - 24px)); overflow-y: auto; overscroll-behavior: contain; padding: 10px; border: 1px solid #c6d4dc; border-radius: 12px; background: white; box-shadow: 0 12px 36px rgba(23,46,69,.2); direction: rtl; }
+.employee-actions-name { color: #172e45; font-size: 13px; font-weight: 700; padding: 6px 8px 10px; border-bottom: 1px solid #e2e8f0; overflow-wrap: anywhere; }
+.employee-actions-group { font-size: 11px; color: #526979; padding: 10px 8px 4px; }
+.employee-actions-menu [role=menuitem] { display: block; width: 100%; text-align: right; padding: 10px 12px; border-radius: 7px; font-size: 14px; color: #172e45; }
+.employee-actions-menu [role=menuitem]:hover, .employee-actions-menu [role=menuitem]:focus-visible { background: #edf5f5; }
+.employee-actions-menu [role=menuitem].employee-action-danger { color: #b91c1c; }
+@media (max-width: 600px) { .employee-actions-menu { top: auto !important; bottom: max(12px,env(safe-area-inset-bottom)); left: 12px !important; right: 12px; width: auto; } }

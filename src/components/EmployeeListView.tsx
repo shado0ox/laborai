@@ -1,3 +1,7 @@
+import EmployeeActions from './EmployeeActions';
+import EmployeeDiscountDialog from './EmployeeDiscountDialog';
+import { getPaymentKind } from '../utils/paymentKind';
+import { isEmployeeCredit } from '../utils/paymentKind';
 import React, { useState, useEffect } from 'react';
 import { Employee, Payment, PricingSettings, UserProfile } from '../types';
 import { g2h, g2hObj, h2g } from '../utils/hijri';
@@ -34,7 +38,7 @@ interface EmployeeListViewProps {
   onArchiveEmployee: (iqamaNo: string, reason: string) => void;
   onUpdateEmployeeExpiry: (iqamaNo: string, expiry: string) => void;
   onUpdateEmployee: (emp: Employee) => void;
-  onRegisterPayment: (iqamaNo: string, amount: number, type: string, notes?: string, m?: string, y?: string) => void;
+  onRegisterPayment: (iqamaNo: string, amount: number, type: string, notes?: string, m?: string, y?: string, transactionKind?: Payment['transactionKind']) => Promise<boolean>;
   onAddKafalaOrder: (iqamaNo: string, months: number, notes?: string, m?: string, y?: string) => void;
   onShowStatement: (emp: Employee) => void;
 }
@@ -71,6 +75,8 @@ export default function EmployeeListView({
 
   // Active selected row employee
   const [selectedEmp, setSelectedEmp] = useState<Employee | null>(null);
+  const [discountEmployee, setDiscountEmployee] = useState<Employee | null>(null);
+  const [savingPayment, setSavingPayment] = useState(false);
 
   // Form states: New Employee
   const [gregMode, setGregMode] = useState(true);
@@ -274,7 +280,7 @@ export default function EmployeeListView({
 
     // 4. Debt status filter
     const empPaid = payments
-      .filter(p => (p.iqamaNo === e.iqamaNo) && !p.type?.includes('مديونية'))
+      .filter(p => (p.iqamaNo === e.iqamaNo) && isEmployeeCredit(p))
       .reduce((sum, p) => sum + (p.amount || 0), 0);
     const empDue = (e.iqamaBalance || 0) + (e.kafalaCount * pricing.kafala) + (e.otherDebt || 0);
     const balance = empPaid - empDue;
@@ -385,7 +391,7 @@ export default function EmployeeListView({
     setNewEmployeeId('');
   };
 
-  const submitPayment = () => {
+  const submitPayment = async () => {
     if (!selectedEmp) return;
     
     let paidAmt = 0;
@@ -415,8 +421,11 @@ export default function EmployeeListView({
       payType = payOtherType;
     }
 
-    onRegisterPayment(selectedEmp.iqamaNo, paidAmt, payType, payOtherNotes, hMonth, hYear);
-    setIsPayOpen(false);
+    if (!Number.isFinite(paidAmt) || paidAmt <= 0) { alert('أدخل مبلغاً أكبر من الصفر.'); return; }
+    setSavingPayment(true);
+    try {
+      if (await onRegisterPayment(selectedEmp.iqamaNo, paidAmt, payType, payOtherNotes, hMonth, hYear, getPaymentKind({ type: payType }))) setIsPayOpen(false);
+    } finally { setSavingPayment(false); }
   };
 
   const handleOpenDebt = (emp: Employee) => {
@@ -540,10 +549,10 @@ export default function EmployeeListView({
 
   // Safe Excel exporter
   const triggerExcelExport = () => {
-    let tsv = 'الاسم\tرقم الإقامة\tالفرع الجاري\tانتهاء الإقامة ميلادي\tانتهاء الإقامة هجري\tالجوال\tالمطلوب الإجمالي\tإجمالي المدفوع\tالرصيد المتبقي\n';
+    let tsv = 'الاسم\tرقم الإقامة\tالفرع الجاري\tانتهاء الإقامة ميلادي\tانتهاء الإقامة هجري\tالجوال\tالمطلوب الإجمالي\tالسداد والخصومات\tالرصيد المتبقي\n';
     
     finalEmployeesList.forEach(e => {
-      const pmts = payments.filter(p => (p.iqamaNo === e.iqamaNo) && !p.type?.includes('مديونية'));
+      const pmts = payments.filter(p => (p.iqamaNo === e.iqamaNo) && isEmployeeCredit(p));
       const paid = pmts.reduce((s, p) => s + (p.amount || 0), 0);
       const due = (e.iqamaBalance || 0) + (e.kafalaCount * pricing.kafala) + (e.otherDebt || 0);
       const bal = paid - due;
@@ -801,14 +810,14 @@ export default function EmployeeListView({
                 <th className="px-2 py-2 text-center font-extrabold">أيام متبقية</th>
                 <th className="px-2 py-2 text-center font-extrabold">الهاتف</th>
                 <th className="px-2 py-2 text-center font-extrabold">المطلوب</th>
-                <th className="px-2 py-2 text-center font-extrabold">المسدد</th>
+                <th className="px-2 py-2 text-center font-extrabold" title="يشمل التحصيل النقدي والخصومات والتسويات التي تقلل رصيد العامل">السداد والتسويات</th>
                 <th className="px-2 py-2 text-center font-extrabold">الرصيد المتبقي</th>
                 <th className="px-2 py-2 text-center font-extrabold">الإجراءات والقيود</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-[11px]">
               {finalEmployeesList.map((e, index) => {
-                const empPays = payments.filter(p => (p.iqamaNo === e.iqamaNo) && !p.type?.includes('مديونية'));
+                const empPays = payments.filter(p => (p.iqamaNo === e.iqamaNo) && isEmployeeCredit(p));
                 const totalPaid = empPays.reduce((sum, p) => sum + (p.amount || 0), 0);
                 const totalDue = (e.iqamaBalance || 0) + (e.kafalaCount * pricing.kafala) + (e.otherDebt || 0);
                 const balance = totalPaid - totalDue;
@@ -855,17 +864,7 @@ export default function EmployeeListView({
                       )}
                     </td>
                     <td className="px-2 py-1.5 text-center">
-                      <input 
-                        type="text" 
-                        value={e.employeeId || ''} 
-                        placeholder="يدوي ✎"
-                        disabled={isReadOnly}
-                        onChange={(event) => {
-                          const val = event.target.value;
-                          onUpdateEmployee({ ...e, employeeId: val });
-                        }}
-                        className="w-20 text-center font-mono font-bold text-[10px] py-0.5 px-1 bg-slate-50 border border-slate-200 rounded focus:bg-white focus:outline-none focus:ring-1 focus:ring-primary-light text-slate-700 placeholder:text-slate-300 placeholder:font-normal"
-                      />
+                      <span className="font-mono text-xs text-slate-600" title="عدّل الكود من إجراءات العامل ثم تعديل البيانات">{e.employeeId || 'غير مسجل'}</span>
                     </td>
                     <td className="px-2 py-1.5 text-center font-mono text-slate-600 font-semibold">{e.iqamaNo}</td>
                     <td className="px-2 py-1.5 text-center">
@@ -883,84 +882,24 @@ export default function EmployeeListView({
                     <td className="px-2 py-1.5 text-center font-black text-emerald-600">{totalPaid.toLocaleString()}</td>
                     <td className="px-2 py-1.5 text-center">
                       <span className={`px-1.5 py-0.2 rounded font-black text-[10px] ${balance < 0 ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'}`}>
-                        {balance.toLocaleString()} {balance < 0 ? 'مستحق' : 'فائض'}
+                        {Math.abs(balance).toLocaleString()} {balance < 0 ? 'مستحق' : 'فائض'}
                       </span>
                     </td>
                     <td className="px-2 py-1.5">
-                      <div className="flex items-center justify-center gap-1 flex-wrap min-w-[200px]">
-                        <button 
-                          onClick={() => onShowStatement(e)}
-                          className="px-1.5 py-0.5 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded text-[10px] font-bold transition-colors cursor-pointer"
-                        >
-                          📋 كشف
-                        </button>
-                        
-                        {!isReadOnly && (
-                          <>
-                             <button 
-                              onClick={() => handleOpenPay(e)}
-                              className="px-1.5 py-0.5 bg-emerald-100 text-emerald-850 hover:bg-emerald-200 rounded text-[10px] font-bold transition-colors cursor-pointer"
-                            >
-                              💵 دفعة
-                            </button>
-                             <button 
-                              onClick={() => handleOpenDebt(e)}
-                              className="px-1.5 py-0.5 bg-rose-100 text-rose-850 hover:bg-rose-200 rounded text-[10px] font-bold transition-colors cursor-pointer"
-                            >
-                              ⚖️ مديونية
-                            </button>
-                             <button 
-                              onClick={() => handleOpenOpening(e)}
-                              className="px-1.5 py-0.5 bg-amber-100 text-amber-900 hover:bg-amber-150 rounded text-[10px] font-bold transition-colors cursor-pointer"
-                              title="تعديل وتحديث الرصيد الافتتاحي المستحق"
-                            >
-                              💳 افتتاح
-                            </button>
-                            <button 
-                              onClick={() => handleOpenEditEmployee(e)}
-                              className="px-1.5 py-0.5 bg-indigo-100 text-indigo-900 hover:bg-indigo-150 rounded text-[10px] font-bold transition-colors cursor-pointer"
-                              title="تعديل وتحديث البيانات الأساسية للموظف"
-                            >
-                              ✍️ تعديل
-                            </button>
-                            <button 
-                              onClick={() => handleOpenExpiry(e)}
-                              className="px-1.5 py-0.5 bg-sky-100 text-sky-850 hover:bg-sky-200 rounded text-[10px] font-bold transition-colors cursor-pointer"
-                            >
-                              📅 تاريخ
-                            </button>
-                            <button 
-                              onClick={() => handleOpenArchive(e)}
-                              className="px-1.5 py-0.5 bg-slate-200 text-slate-800 hover:bg-slate-350 rounded text-[10px] font-bold transition-colors cursor-pointer"
-                            >
-                              📦 أرشفة
-                            </button>
-                            {activeRole === 'admin' && (
-                              <button 
-                                onClick={() => {
-                                  if (confirm(`تحذير نهائي! هل أنت متأكد من حذف الموظف "${e.name}" بشكل كلي ونهائي من قاعدة البيانات؟ سيتم مسح قيوده المالية كذلك.`)) {
-                                    onDeleteEmployee(e.iqamaNo);
-                                  }
-                                }}
-                                className="px-1 py-0.5 text-red-600 hover:bg-red-50 rounded transition-colors"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                          </>
-                        )}
-
-                        {formattedMob && (
-                          <a 
-                            href={`https://wa.me/${formattedMob}?text=${waText}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="px-2 py-1 bg-[#25d366]/10 text-emerald-600 hover:bg-[#25d366]/20 rounded-lg font-bold transition-colors flex items-center gap-0.5"
-                          >
-                            <MessageSquare className="w-3 h-3" />
-                            <span>واتساب</span>
-                          </a>
-                        )}
+                      <div className="flex items-center justify-center gap-2 min-w-[175px]">
+                        <button onClick={() => onShowStatement(e)} className="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200 text-xs font-bold">كشف الحساب</button>
+                        {!isReadOnly && <EmployeeActions name={e.name} actions={[
+                          { group: 'الحركات المالية', label: 'تحصيل دفعة', onSelect: () => handleOpenPay(e) },
+                          { group: 'الحركات المالية', label: 'خصم بدون تحصيل', onSelect: () => setDiscountEmployee(e) },
+                          { group: 'الحركات المالية', label: 'إثبات مديونية', onSelect: () => handleOpenDebt(e) },
+                          { group: 'الحركات المالية', label: 'تعديل الرصيد الافتتاحي', onSelect: () => handleOpenOpening(e) },
+                          { group: 'بيانات العامل', label: 'تعديل البيانات', onSelect: () => handleOpenEditEmployee(e) },
+                          { group: 'بيانات العامل', label: 'تحديث انتهاء الإقامة', onSelect: () => handleOpenExpiry(e) },
+                          { group: 'بيانات العامل', label: 'أرشفة العامل', onSelect: () => handleOpenArchive(e) },
+                          ...(activeRole === 'admin' ? [{ group: 'إجراءات نهائية', label: 'حذف العامل نهائياً', destructive: true, onSelect: () => {
+                            if (confirm(`هل تريد حذف العامل "${e.name}" وقيوده المالية نهائياً؟`)) onDeleteEmployee(e.iqamaNo);
+                          } }] : [])
+                        ]} />}
                       </div>
                     </td>
                   </tr>
@@ -1113,6 +1052,8 @@ export default function EmployeeListView({
         </div>
       )}
 
+      {discountEmployee && <EmployeeDiscountDialog employee={discountEmployee} onClose={() => setDiscountEmployee(null)} onSave={(amount, notes) => onRegisterPayment(discountEmployee.iqamaNo, amount, 'خصم بدون تحصيل', notes, undefined, undefined, 'discount')} />}
+
       {/* 💳 MODAL 2: RECORD PAYMENT */}
       {isPayOpen && selectedEmp && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -1252,20 +1193,21 @@ export default function EmployeeListView({
                       <select value={payOtherType} onChange={(e) => setPayOtherType(e.target.value)} className="w-full py-2 px-3 border border-slate-200 rounded-lg text-xs">
                         <option>دفعة جزئية</option>
                         <option>تسوية رصيد</option>
-                        <option>خصم عمالةพิเศษ</option>
+
                         <option>مساندات وتصفية</option>
                       </select>
                     </div>
                     <div className="space-y-1">
-                      <label>المبلغ المستلم (ريال)</label>
+                      <label>{payOtherType === 'تسوية رصيد' ? 'مبلغ التسوية غير النقدية (ريال)' : 'المبلغ المستلم (ريال)'}</label>
                       <input type="number" value={payAmountOther} onChange={(e) => setPayAmountOther(Number(e.target.value))} className="w-full font-mono text-xs py-2 px-3 border border-slate-200 rounded-lg bg-emerald-50 text-emerald-850" />
                     </div>
                   </div>
                 </div>
               )}
 
+              {payTab === 'other' && payOtherType === 'تسوية رصيد' && <p className="text-amber-900 bg-amber-50 p-3 rounded-lg">تسوية غير نقدية: تؤثر في رصيد العامل ولا تظهر ضمن الوارد والصادر.</p>}
               <div className="space-y-1">
-                <label>ملاحظات وسند استلام الحوالة</label>
+                <label>ملاحظات العملية</label>
                 <textarea value={payOtherNotes} onChange={(e) => setPayOtherNotes(e.target.value)} placeholder="مثال: رقم العملية 09482 بمطابقة حساب بنك الراجحي" className="w-full py-1.5 px-3 border border-slate-200 rounded-lg text-xs" style={{ minHeight: '50px' }}></textarea>
               </div>
 
@@ -1273,7 +1215,7 @@ export default function EmployeeListView({
 
             <div className="p-4 bg-slate-50 border-t border-slate-150 flex justify-end gap-2.5">
               <button onClick={() => setIsPayOpen(false)} className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg text-xs hover:bg-slate-300 font-semibold">أغلق</button>
-              <button onClick={submitPayment} className="px-5 py-2 bg-emerald-600 text-white rounded-lg text-xs hover:bg-emerald-700 font-bold shadow-md">تسجيل الدفعة والتاكيد ✓</button>
+              <button disabled={savingPayment} onClick={submitPayment} className="px-5 py-2 bg-emerald-600 text-white rounded-lg text-xs hover:bg-emerald-700 font-bold shadow-md">{savingPayment ? 'جارٍ الحفظ…' : payTab === 'other' && payOtherType === 'تسوية رصيد' ? 'حفظ التسوية غير النقدية' : 'تسجيل التحصيل'}</button>
             </div>
           </div>
         </div>

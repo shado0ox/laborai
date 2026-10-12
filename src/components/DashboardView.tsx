@@ -1,3 +1,4 @@
+import { isEmployeeCredit, isCashReceipt } from '../utils/paymentKind';
 import React, { useState } from 'react';
 import { Employee, Payment, ActivityLog, PricingSettings } from '../types';
 import { 
@@ -36,6 +37,7 @@ export default function DashboardView({
 
   // Compute stats
   let totalPayments = 0;
+  let totalCredits = 0;
   let totalDues = 0;
   let criticalCount30 = 0;
   let alertCount60 = 0;
@@ -47,24 +49,27 @@ export default function DashboardView({
     debtorsCount: number;
     totalDues: number;
     totalPaid: number;
+    totalCredits: number;
     criticalCount: number;
   }> = {};
 
   branches.forEach(b => {
-    branchMap[b] = { activeCount: 0, debtorsCount: 0, totalDues: 0, totalPaid: 0, criticalCount: 0 };
+    branchMap[b] = { activeCount: 0, debtorsCount: 0, totalDues: 0, totalPaid: 0, totalCredits: 0, criticalCount: 0 };
   });
 
   activeEmployees.forEach(e => {
     // Paid sum
     const empPaid = payments
-      .filter(p => (p.iqamaNo === e.iqamaNo) && !p.type?.includes('مديونية'))
+      .filter(p => (p.iqamaNo === e.iqamaNo) && isEmployeeCredit(p))
       .reduce((sum, p) => sum + (p.amount || 0), 0);
 
     // Due sum
     const empDue = (e.iqamaBalance || 0) + (e.kafalaCount * pricing.kafala) + (e.otherDebt || 0);
     const balance = empPaid - empDue;
 
-    totalPayments += empPaid;
+    const cashReceived = payments.filter(p => p.iqamaNo === e.iqamaNo && isCashReceipt(p)).reduce((sum, p) => sum + p.amount, 0);
+    totalPayments += cashReceived;
+    totalCredits += empPaid;
     totalDues += empDue;
 
     if (balance < 0) {
@@ -92,13 +97,14 @@ export default function DashboardView({
     if (branchMap[b]) {
       branchMap[b].activeCount++;
       branchMap[b].totalDues += empDue;
-      branchMap[b].totalPaid += empPaid;
+      branchMap[b].totalPaid += cashReceived;
+      branchMap[b].totalCredits += empPaid;
       if (balance < 0) branchMap[b].debtorsCount++;
       if (daysDiff !== null && daysDiff <= 30) branchMap[b].criticalCount++;
     }
   });
 
-  const totalOutstanding = totalDues - totalPayments;
+  const totalOutstanding = totalDues - totalCredits;
 
   // Filtered Logs
   const filteredLogs = logFilter ? logs.filter(l => l.type === logFilter) : logs;
@@ -173,7 +179,7 @@ export default function DashboardView({
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {Object.entries(branchMap).map(([bName, stats]) => {
-              const outstanding = stats.totalDues - stats.totalPaid;
+              const outstanding = stats.totalDues - stats.totalCredits;
               return (
                 <div key={bName} className="p-4 rounded-xl bg-[#f8fafc] border border-slate-200/65 hover:shadow-md transition-shadow">
                   <h4 className="font-extrabold text-xs text-[#0d5189] mb-3 flex items-center justify-between">

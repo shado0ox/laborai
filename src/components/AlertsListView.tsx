@@ -1,3 +1,4 @@
+import { isEmployeeCredit } from '../utils/paymentKind';
 import React from 'react';
 import { Employee, Payment, PricingSettings } from '../types';
 import { g2h } from '../utils/hijri';
@@ -36,7 +37,7 @@ export default function AlertsListView({
 
   // Compute debtors (balance < 0)
   const debtorsList = activeEmployees.map(e => {
-    const empPays = payments.filter(p => (p.iqamaNo === e.iqamaNo) && !p.type?.includes('مديونية'));
+    const empPays = payments.filter(p => (p.iqamaNo === e.iqamaNo) && isEmployeeCredit(p));
     const paid = empPays.reduce((sum, p) => sum + (p.amount || 0), 0);
     const due = (e.iqamaBalance || 0) + (e.kafalaCount * pricing.kafala) + (e.otherDebt || 0);
     const balance = paid - due;

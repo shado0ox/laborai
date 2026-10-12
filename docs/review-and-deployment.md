@@ -61,3 +61,13 @@ With the disposable sandbox running, install Python Playwright once (`python -m 
 ![Arabic login](screenshots/login-desktop.png)
 
 ![Dashboard with synthetic sandbox data](screenshots/dashboard-desktop.png)
+
+## Non-cash discounts and employee actions
+
+Employee transactions now have a stored `transaction_kind`: receipt, debt, discount or settlement. The new nullable database column preserves existing records; legacy descriptions containing خصم or تسوية are classified as non-cash on read. Only receipts enter the automatic cash ledger, collection history and monthly collection reports. Discounts and settlements continue reducing the employee balance and appearing as credits in the employee statement. Debt entries are never treated as cash received. Explicit kinds survive later description edits.
+
+The workforce table keeps a statement button and one grouped actions menu. The menu supports keyboard navigation, closes on Escape/outside click, and renders outside the horizontally scrolling table so it works on mobile. Discounts have a separate form that explains their accounting effect and waits for successful persistence before closing. Receipt submission rejects zero amounts, disables repeat submission while saving, and keeps the form open on a save failure. Employee codes are edited through the data form rather than sending an API update for every typed character.
+
+Validation now includes 16 automated tests and a browser scenario: opening dues 3,800, receipt 1,500, discount 100 → employee outstanding 2,200; cash receipts remain 1,500 and the discount is absent from the cash ledger.
+
+![Grouped employee actions on mobile](screenshots/employee-actions-mobile.png)

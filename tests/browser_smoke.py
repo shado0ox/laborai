@@ -38,6 +38,30 @@ with sync_playwright() as p:
     assert page.get_by_text('عامل تجريبي 1', exact=True).is_visible()
     page.screenshot(path=str(output / 'employees-mobile.png'), full_page=True)
     page.get_by_role('button', name='فتح قائمة التنقل', exact=True).click()
+    page.get_by_role('button', name='ملفات العمالة').click()
+    page.wait_for_function("document.querySelector('#app-navigation').getBoundingClientRect().x >= innerWidth - 1")
+    page.get_by_role('button', name='إجراءات عامل تجريبي 1', exact=True).click()
+    page.get_by_role('menuitem', name='خصم بدون تحصيل', exact=True).click()
+    page.get_by_label('مبلغ الخصم (ريال)', exact=True).fill('100')
+    page.get_by_label('سبب الخصم', exact=True).fill('خصم تجريبي معتمد بدون استلام نقدي')
+    with page.expect_response(lambda response: '/api/payments?' in response.url and response.request.method == 'POST') as saved:
+        page.get_by_role('button', name='حفظ الخصم', exact=True).click()
+    assert saved.value.status == 200
+    page.get_by_role('dialog').wait_for(state='hidden')
+    row = page.get_by_role('row').filter(has_text='عامل تجريبي 1')
+    assert row.get_by_text('1,600', exact=True).is_visible()
+    assert '2,200' in row.inner_text(), 'Discount must reduce outstanding balance by 100'
+    page.get_by_role('button', name='إجراءات عامل تجريبي 1', exact=True).click()
+    page.screenshot(path=str(output / 'employee-actions-mobile.png'), full_page=True)
+    page.keyboard.press('Escape')
+    page.get_by_role('button', name='فتح قائمة التنقل', exact=True).click()
+    page.get_by_role('button', name='كشف الوارد والصادر العام', exact=True).click()
+    page.wait_for_function("document.querySelector('#app-navigation').getBoundingClientRect().x >= innerWidth - 1")
+    page.wait_for_load_state('networkidle')
+    assert 'خصم تجريبي' not in page.locator('main').inner_text(), 'Non-cash discount must not reach the cash ledger'
+    assert '1,500' in page.locator('main').inner_text(), 'Cash receipts must remain 1500'
+    page.screenshot(path=str(output / 'cash-ledger-after-discount-mobile.png'), full_page=True)
+    page.get_by_role('button', name='فتح قائمة التنقل', exact=True).click()
     page.get_by_role('button', name='إعدادات الشركة', exact=True).click()
     page.wait_for_function("document.querySelector('#app-navigation').getBoundingClientRect().x >= innerWidth - 1")
     page.get_by_label('اسم المستخدم الجديد', exact=True).fill('عضو التجربة')
@@ -64,4 +88,4 @@ with sync_playwright() as p:
     assert len(requests) == 1, 'Registration must submit exactly one request'
     assert not errors, errors
     browser.close()
-    print('PASS: login, desktop/mobile layout, navigation, member creation and single registration request; no JavaScript errors')
+    print('PASS: login, desktop/mobile layout, navigation, member creation, non-cash discount, worker balance, cash-ledger exclusion and single registration request; no JavaScript errors')

@@ -1,3 +1,4 @@
+import { isCashReceipt } from '../utils/paymentKind';
 import { escapeHtml, printLogo } from '../utils/printSafety';
 import React, { useState, useEffect } from 'react';
 import { Payment, UserProfile, GeneralLedgerEntry } from '../types';
@@ -98,7 +99,7 @@ export default function GeneralLedgerView({
 
     // 1. Add employee payments (credit / وارد) if not debit/debt entries
     payments.forEach(p => {
-      if (p.type?.includes('مديونية')) return;
+      if (!isCashReceipt(p)) return;
       merged.push({
         id: p.id,
         date: p.date,

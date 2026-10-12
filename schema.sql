@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS payments (
     branch VARCHAR(150) NOT NULL,
     amount DECIMAL(12, 2) NOT NULL,
     type VARCHAR(150) NOT NULL,
+    transaction_kind VARCHAR(20),
     date DATE NOT NULL,
     notes TEXT,
     hijri_month VARCHAR(50),

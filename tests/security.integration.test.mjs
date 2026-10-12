@@ -97,6 +97,17 @@ test('PostgreSQL-backed ownership, authentication and persistence', { timeout: 9
     await api('/api/general-ledger', 'POST', entry, adminA); await api('/api/general-ledger', 'POST', { ...entry, bayan: 'B entry' }, adminB);
     assert.equal((await api('/api/general-ledger', 'GET', undefined, adminA))[0].bayan, 'A entry');
   });
+  await t.test('discount and settlement kinds persist independently from cash receipts', async () => {
+    const payment = { iqamaNo: '2000000001', name: 'Ignored', branch: 'East', amount: 25, date: '2026-10-01' };
+    await api('/api/payments', 'POST', { ...payment, id: 'legacy-discount', type: 'خصم عمالةพิเศษ' }, adminA);
+    await api('/api/payments', 'POST', { ...payment, id: 'explicit-discount', type: 'إعفاء بموافقة الإدارة', transactionKind: 'discount' }, adminA);
+    await api('/api/payments', 'POST', { ...payment, id: 'settlement', type: 'تسوية رصيد' }, adminA);
+    const payments = await api('/api/payments', 'GET', undefined, adminA);
+    assert.equal(payments.find(p => p.id === 'legacy-discount').transactionKind, 'discount');
+    assert.equal(payments.find(p => p.id === 'explicit-discount').transactionKind, 'discount');
+    assert.equal(payments.find(p => p.id === 'settlement').transactionKind, 'settlement');
+    assert.equal(payments.find(p => p.id === 'shared-payment').transactionKind, 'receipt');
+  });
   await t.test('branch reads and writes cannot escape assigned branch', async () => {
     const employees = await api('/api/employees', 'GET', undefined, branch.token); assert.equal(employees.length, 1); assert.equal(employees[0].branch, 'East');
     assert.deepEqual(await api('/api/branches', 'GET', undefined, branch.token), ['East']);
@@ -120,7 +131,7 @@ test('PostgreSQL-backed ownership, authentication and persistence', { timeout: 9
   await t.test('payment deletion persists and does not delete same ID in another tenant', async () => {
     await api('/api/payments/shared-payment', 'DELETE', undefined, viewer.token, 403);
     await api('/api/payments/shared-payment', 'DELETE', undefined, branch.token);
-    assert.equal((await api('/api/payments', 'GET', undefined, adminA)).length, 0);
+    assert.equal((await api('/api/payments', 'GET', undefined, adminA)).filter(p => p.transactionKind === 'receipt').length, 0);
     assert.equal((await api('/api/payments', 'GET', undefined, adminB)).length, 1);
   });
   await t.test('role/status/deletion changes invalidate existing sessions', async () => {

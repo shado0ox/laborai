@@ -1,3 +1,4 @@
+import { isCashReceipt } from '../utils/paymentKind';
 import React from 'react';
 import { Payment } from '../types';
 import { Calendar, BarChart3, TrendingUp, Sparkles } from 'lucide-react';
@@ -16,7 +17,7 @@ export default function MonthlyFinanceView({ payments }: MonthlyFinanceViewProps
   }> = {};
 
   payments.forEach(p => {
-    if (!p.date || p.type?.includes('مديونية')) return;
+    if (!p.date || !isCashReceipt(p)) return;
     const monthKey = p.date.substring(0, 7); // "YYYY-MM"
     
     if (!monthlyData[monthKey]) {
@@ -35,7 +36,7 @@ export default function MonthlyFinanceView({ payments }: MonthlyFinanceViewProps
 
   const sortedMonths = Object.keys(monthlyData).sort((a, b) => b.localeCompare(a));
 
-  const actualPayments = payments.filter(p => !p.type?.includes('مديونية'));
+  const actualPayments = payments.filter(p => isCashReceipt(p));
   const totalCollectedAllTime = actualPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
   const totalOperationsCount = actualPayments.length;
   const globalAverage = totalOperationsCount > 0 ? Math.round(totalCollectedAllTime / totalOperationsCount) : 0;

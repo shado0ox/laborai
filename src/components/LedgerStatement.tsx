@@ -1,3 +1,4 @@
+import { isCashReceipt, isDebt as isDebtEntry, getPaymentKind, PAYMENT_KIND_LABELS } from '../utils/paymentKind';
 import { escapeHtml, printLogo } from '../utils/printSafety';
 import React, { useState, useEffect } from 'react';
 import { Employee, Payment, PricingSettings, UserProfile } from '../types';
@@ -67,7 +68,7 @@ export default function LedgerStatement({
     p => p.iqamaNo === employee.iqamaNo
   );
 
-  const kafalaPays = empPayments.filter(p => p.type?.includes('كفالة'));
+  const kafalaPays = empPayments.filter(p => isCashReceipt(p) && p.type?.includes('كفالة'));
   const iqamaPays = empPayments.filter(p => p.type?.includes('إقامة') || p.type?.includes('رخصة') || p.type?.includes('تجديد'));
   const ramadanPays = kafalaPays.filter(p => p.hijriMonth && parseInt(p.hijriMonth, 10) === 9);
 
@@ -123,7 +124,7 @@ export default function LedgerStatement({
   let subOtherDebts = 0;
 
   empPayments.forEach(p => {
-    if (p.type?.includes('مديونية')) {
+    if (isDebtEntry(p)) {
       const amt = parseFloat(String(p.amount || 0));
       if (p.type?.includes('كفالة')) {
         subKafalaDebts += amt;
@@ -180,7 +181,7 @@ export default function LedgerStatement({
     const isKafala = p.type?.includes('كفالة');
     const isIqama = p.type?.includes('تجديد') || p.type?.includes('إقامة');
     const isRamadan = isKafala && p.hijriMonth && parseInt(p.hijriMonth, 10) === 9;
-    const isDebt = p.type?.includes('مديونية');
+    const isDebt = isDebtEntry(p);
     
     let hijriLabel = '';
     if (isKafala && p.hijriMonth) {
@@ -190,7 +191,7 @@ export default function LedgerStatement({
       hijriLabel = 'إقامة';
     }
 
-    const desc = p.type + (isRamadan && pricing.ramadanFree ? ' 🎁 عفو رمضان المجاني' : '') + (p.notes ? ` — ${p.notes}` : '');
+    const desc = (isCashReceipt(p) || isDebtEntry(p) || p.type === PAYMENT_KIND_LABELS[getPaymentKind(p)] ? p.type : `${PAYMENT_KIND_LABELS[getPaymentKind(p)]}: ${p.type}`) + (isRamadan && pricing.ramadanFree ? ' 🎁 عفو رمضان المجاني' : '') + (p.notes ? ` — ${p.notes}` : '');
     
     if (isDebt) {
       ledger.push({
@@ -402,7 +403,7 @@ export default function LedgerStatement({
             <div class="value" style="color: #b91c1c;">${totalDebit.toLocaleString('ar-SA')} ريال</div>
           </div>
           <div class="stat-card" style="border-right: 4px solid #15803d;">
-            <div class="label">إجمالي المدفوع سلفاً</div>
+            <div class="label">إجمالي السداد والخصومات والتسويات</div>
             <div class="value" style="color: #15803d;">${totalCredit.toLocaleString('ar-SA')} ريال</div>
           </div>
           <div class="stat-card" style="border-right: 4px solid ${finalBalance > 0 ? '#b91c1c' : '#15803d'}; background-color: ${finalBalance > 0 ? '#fef2f2' : '#f0fdf4'};">
@@ -429,7 +430,7 @@ export default function LedgerStatement({
               <th style="width: 15%;">الشهر الهجري</th>
               <th style="width: 40%">البيان التفصيلي للعملية</th>
               <th style="width: 10%">سحب دَين (مدين)</th>
-              <th style="width: 10%">توريد دفعة (دائن)</th>
+              <th style="width: 10%">سداد / خصم (دائن)</th>
               <th style="width: 15%">المتبقي الجاري</th>
             </tr>
           </thead>
@@ -527,7 +528,7 @@ export default function LedgerStatement({
         </div>
         
         <div className="bg-emerald-50/40 border border-emerald-100 rounded-2xl p-4 text-center">
-          <span className="text-xs text-slate-500 block mb-1">إجمالي المدفوعات (دائن)</span>
+          <span className="text-xs text-slate-500 block mb-1">إجمالي السداد والخصومات والتسويات (دائن)</span>
           <span className="text-xl font-black text-emerald-700">{totalCredit.toLocaleString()} ريال</span>
         </div>
 
@@ -565,7 +566,7 @@ export default function LedgerStatement({
                 <th className="px-4 py-3 text-center font-bold">الشهر الهجري</th>
                 <th className="px-4 py-3 font-bold text-right">البيان التفصيلي للعملية (اضغط للتعديل)</th>
                 <th className="px-4 py-3 text-center font-bold text-red-600">القيمة المطلوبة (مدين)</th>
-                <th className="px-4 py-3 text-center font-bold text-emerald-600">القيمة المدفوعة (دائن)</th>
+                <th className="px-4 py-3 text-center font-bold text-emerald-600">سداد / خصم / تسوية (دائن)</th>
                 <th className="px-4 py-3 text-center font-bold">الرصيد التراكمي</th>
                 {currentUser?.role !== 'viewer' && (
                   <th className="px-4 py-3 text-center font-bold">التحكم</th>
@@ -624,7 +625,7 @@ export default function LedgerStatement({
                             onClick={() => {
                               if (onDeletePayment) {
                                 const amt = isDebit ? line.debit : line.credit;
-                                const typeLabel = isDebit ? 'قيد مديونية' : 'دفعة سداد';
+                                const typeLabel = isDebit ? 'قيد مديونية' : 'سداد أو خصم';
                                 if (confirm(`⚠️ تحذير محاسبي!\nهل أنت متأكد من رغبتك في حذف هذا القيد (${typeLabel}) بقيمة ${amt.toLocaleString()} ريال نهائياً من ذمة العامل؟`)) {
                                   onDeletePayment(line.key, employee.name, amt);
                                 }

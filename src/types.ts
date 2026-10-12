@@ -19,6 +19,7 @@ export interface Employee {
 }
 
 export interface Payment {
+  transactionKind?: import('./utils/paymentKind').PaymentKind;
   id: string;
   iqamaNo: string;
   name: string;

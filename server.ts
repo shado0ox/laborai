@@ -1,3 +1,4 @@
+import { getPaymentKind } from './src/utils/paymentKind';
 import express from "express";
 import path from "path";
 import crypto from "crypto";
@@ -177,6 +178,7 @@ const employeeSchema = z.object({
 });
 
 const paymentSchema = z.object({
+  transactionKind: z.enum(["receipt", "debt", "discount", "settlement"]).optional(),
   id: z.string().min(1, "معرف الدفعة مطلوب"),
   iqamaNo: z.string().min(1, "رقم الإقامة مطلوب"),
   name: z.string().min(1, "الاسم مطلوب"),
@@ -689,6 +691,8 @@ async function initializeTables() {
         tenant_id VARCHAR(128)
       );
     `);
+
+    await client.query("ALTER TABLE payments ADD COLUMN IF NOT EXISTS transaction_kind VARCHAR(20)");
 
     // 4. Pricing Settings table
     await client.query(`
@@ -1381,6 +1385,7 @@ app.get("/api/payments", requireAuth, async (req: any, res: any) => {
         branch: r.branch,
         amount: Number(r.amount || 0),
         type: r.type,
+        transactionKind: getPaymentKind({ type: r.type, transactionKind: r.transaction_kind }),
         date: r.date ? r.date.toISOString().slice(0, 10) : "",
         notes: r.notes || undefined,
         hijriMonth: r.hijri_month || undefined,
@@ -1403,7 +1408,7 @@ app.post("/api/payments", requireAuth, async (req: any, res: any) => {
   if (!parseResult.success) {
     return res.status(400).json({ error: formatZodError(parseResult.error) });
   }
-  const p = parseResult.data;
+  const p = { ...parseResult.data, transactionKind: getPaymentKind(parseResult.data) };
   const tenantId = getTenantId(req);
   try {
     const employee = await findEmployee(tenantId, p.iqamaNo);
@@ -1418,11 +1423,11 @@ app.post("/api/payments", requireAuth, async (req: any, res: any) => {
     if (pool) {
       // Cleaned PostgreSQL upsert
       const saved = await runQuery(
-        `INSERT INTO payments (id, iqama_no, name, branch, amount, type, date, notes, hijri_month, hijri_year, tenant_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO payments (id, iqama_no, name, branch, amount, type, date, notes, hijri_month, hijri_year, tenant_id, transaction_kind)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (tenant_id, id) DO UPDATE SET
            name=EXCLUDED.name, branch=EXCLUDED.branch, amount=EXCLUDED.amount, type=EXCLUDED.type, 
-           date=EXCLUDED.date, notes=EXCLUDED.notes, hijri_month=EXCLUDED.hijri_month, hijri_year=EXCLUDED.hijri_year
+           date=EXCLUDED.date, notes=EXCLUDED.notes, hijri_month=EXCLUDED.hijri_month, hijri_year=EXCLUDED.hijri_year, transaction_kind=EXCLUDED.transaction_kind
            WHERE (? = 'admin' OR payments.branch = ?) AND payments.iqama_no = EXCLUDED.iqama_no RETURNING id`,
         [
           p.id,
@@ -1435,7 +1440,7 @@ app.post("/api/payments", requireAuth, async (req: any, res: any) => {
           p.notes || null,
           p.hijriMonth || null,
           p.hijriYear || null,
-          tenantId, req.user.role, req.user.branch || ""
+          tenantId, p.transactionKind, req.user.role, req.user.branch || ""
         ]
       );
       if (!saved.length) return res.status(403).json({ error: "الدفعة خارج نطاق فرعك أو تخص موظفاً آخر." });

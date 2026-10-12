@@ -1,3 +1,4 @@
+import { isEmployeeCredit } from './utils/paymentKind';
 import React, { useState, useEffect } from 'react';
 import { 
   Employee, Payment, PricingSettings, CompanySettings, UserProfile, ActivityLog 
@@ -703,8 +704,9 @@ export default function App() {
     type: string, 
     notes?: string,
     m?: string,
-    y?: string
-  ) => {
+    y?: string,
+    transactionKind?: Payment['transactionKind']
+  ): Promise<boolean> => {
     const emp = employees.find(e => e.iqamaNo === iqamaNo);
     const newPayment: Payment = {
       id: `pay_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
@@ -716,7 +718,8 @@ export default function App() {
       date: new Date().toISOString().slice(0, 10),
       notes,
       hijriMonth: m,
-      hijriYear: y
+      hijriYear: y,
+      transactionKind
     };
 
     try {
@@ -729,11 +732,14 @@ export default function App() {
         const errData = await res.json().catch(() => ({}));
         throw new Error(errData.error || `فشل الحفظ (HTTP ${res.status})`);
       }
-      setPayments(prev => [newPayment, ...prev]);
-      logActivity('pay', `تسجيل دفعة نقدية بقيمة ${amount.toLocaleString()} ريال للموظف ${emp?.name} — ببيان: ${type}`);
+      const saved = await res.json();
+      setPayments(prev => [saved.payment || newPayment, ...prev]);
+      logActivity('pay', `تسجيل حركة للعامل بقيمة ${amount.toLocaleString()} ريال للموظف ${emp?.name} — ببيان: ${type}`);
+      return true;
     } catch (err: any) {
       console.error('API register payment error:', err);
-      alert(`⚠️ لم يتم حفظ الدفعة في قاعدة البيانات: ${err.message || 'تعذر الاتصال بالخادم'}`);
+      alert(`⚠️ لم يتم حفظ الحركة في قاعدة البيانات: ${err.message || 'تعذر الاتصال بالخادم'}`);
+      return false;
     }
   };
 
@@ -835,10 +841,6 @@ export default function App() {
       console.error('API reset data error:', err);
       toastNotice(`⚠️ لم تكتمل عملية إعادة التعيين بالكامل: ${err.message || 'تعذر الاتصال بالخادم'}`);
     }
-  };
-
-  const handleRegisterPaymentProxy = (iqNo: string, amt: number, type: string, n?: string, m?: string, y?: string) => {
-    handleRegisterPayment(iqNo, amt, type, n, m, y);
   };
 
   // Settings methods
@@ -1034,7 +1036,7 @@ export default function App() {
 
     // debtors count
     const debtCount = active.filter(e => {
-      const pmts = payments.filter(p => (p.iqamaNo === e.iqamaNo) && !p.type?.includes('مديونية'));
+      const pmts = payments.filter(p => (p.iqamaNo === e.iqamaNo) && isEmployeeCredit(p));
       const paid = pmts.reduce((s, p) => s + (p.amount || 0), 0);
       const due = (e.iqamaBalance || 0) + (e.kafalaCount * pricingSettings.kafala) + (e.otherDebt || 0);
       return (paid - due) < 0;
@@ -1375,7 +1377,7 @@ export default function App() {
                   onArchiveEmployee={handleArchiveEmployee}
                   onUpdateEmployeeExpiry={handleUpdateEmployeeExpiry}
                   onUpdateEmployee={handleUpdateEmployee}
-                  onRegisterPayment={handleRegisterPaymentProxy}
+                  onRegisterPayment={handleRegisterPayment}
                   onAddKafalaOrder={handleAddKafalaOrder}
                   onShowStatement={(emp) => setSelectedStatementEmp(emp)}
                 />
