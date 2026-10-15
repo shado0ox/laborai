@@ -325,6 +325,7 @@ export default function EmployeeListView({
     setPayAmountIqama(pricing.iqama12);
     setPayIqamaDuration(12);
     setPayAmountOther(0);
+    setPayOtherType('دفعة جزئية');
     setPayOtherNotes('');
     setIsPayOpen(true);
   };
@@ -1141,8 +1142,9 @@ export default function EmployeeListView({
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1">
                       <label>نوع العملية والوصف</label>
-                      <select value={payOtherType} onChange={(e) => setPayOtherType(e.target.value)} className="w-full py-2 px-3 border border-slate-200 rounded-lg text-xs">
+                      <select aria-label="نوع التحصيل الآخر" value={payOtherType} onChange={(e) => setPayOtherType(e.target.value)} className="w-full py-2 px-3 border border-slate-200 rounded-lg text-xs">
                         <option>دفعة جزئية</option>
+                        <option>سداد كامل المستحق</option>
                         <option>تسوية رصيد</option>
 
                         <option>مساندات وتصفية</option>
@@ -1150,12 +1152,14 @@ export default function EmployeeListView({
                     </div>
                     <div className="space-y-1">
                       <label>{payOtherType === 'تسوية رصيد' ? 'مبلغ التسوية غير النقدية (ريال)' : 'المبلغ المستلم (ريال)'}</label>
-                      <input type="number" value={payAmountOther} onChange={(e) => setPayAmountOther(Number(e.target.value))} className="w-full font-mono text-xs py-2 px-3 border border-slate-200 rounded-lg bg-emerald-50 text-emerald-850" />
+                      <input aria-label="مبلغ التحصيل الآخر" type="number" value={payAmountOther} onChange={(e) => setPayAmountOther(Number(e.target.value))} className="w-full font-mono text-xs py-2 px-3 border border-slate-200 rounded-lg bg-emerald-50 text-emerald-850" />
                     </div>
                   </div>
                 </div>
               )}
 
+              {payTab === 'other' && <button type="button" className="finance-button w-full" onClick={() => { setPayOtherType('سداد كامل المستحق'); setPayAmountOther(Math.max(0, employeeDues(selectedEmp, pricing, payments) - payments.filter(payment=>payment.iqamaNo===selectedEmp.iqamaNo && isEmployeeCredit(payment)).reduce((sum,payment)=>sum+Number(payment.amount || 0),0))); }}>سداد كامل المستحق</button>}
+              {payTab === 'other' && payOtherType !== 'تسوية رصيد' && <p className="text-sm text-slate-600">عند تغطية جميع المستحقات بتحصيل فعلي، يتحدث آخر شهر كفالة مدفوع تلقائيًا في كشف العامل.</p>}
               {payTab === 'other' && payOtherType === 'تسوية رصيد' && <p className="text-amber-900 bg-amber-50 p-3 rounded-lg">تسوية غير نقدية: تؤثر في رصيد العامل ولا تظهر ضمن الوارد والصادر.</p>}
               <label className="block text-sm">حساب التحصيل<select aria-label="حساب التحصيل" value={payCashAccount} onChange={event => setPayCashAccount(event.target.value as 'cash' | 'bank')} className="field"><option value="cash">الصندوق</option><option value="bank">البنك</option></select></label>
               <div className="space-y-1">
