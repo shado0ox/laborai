@@ -13,11 +13,44 @@ export function validISODate(value: string): boolean {
   const date = new Date(value+'T12:00:00Z');
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0,10)===value && Number(value.slice(0,4))>=1900 && Number(value.slice(0,4))<=2200;
 }
-export function addCalendarMonths(value: string, months: number): string {
-  const date = new Date(value+'T12:00:00Z'), day=date.getUTCDate();
-  date.setUTCDate(1); date.setUTCMonth(date.getUTCMonth()+months);
-  const last=new Date(Date.UTC(date.getUTCFullYear(),date.getUTCMonth()+1,0)).getUTCDate();
-  date.setUTCDate(Math.min(day,last)); return date.toISOString().slice(0,10);
+// Use the same Umm al-Qura calendar in browser and server; ISO dates identify stored days only.
+const hijriDayFormatter=new Intl.DateTimeFormat('en-u-ca-islamic-umalqura-nu-latn',{timeZone:'UTC',year:'numeric',month:'numeric',day:'numeric'});
+function calendarParts(value: string) {
+  const parts=hijriDayFormatter.formatToParts(new Date(value+'T12:00:00Z'));
+  const part=(type:string)=>Number(parts.find(p=>p.type===type)?.value);
+  return {year:part('year'),month:part('month'),day:part('day')};
+}
+export function hijriParts(value:string) {
+  if(!validISODate(value)) throw new RangeError('Invalid date');
+  return calendarParts(value);
+}
+const monthStarts=new Map<string,number>();
+function hijriMonthStart(year:number,month:number):number {
+  if(!Number.isInteger(year)||year<1317||year>1700||!Number.isInteger(month)||month<1||month>12) throw new RangeError('Invalid Hijri month');
+  const key=`${year}-${month}`;
+  if(monthStarts.has(key)) return monthStarts.get(key)!;
+  let lo=Math.floor(Date.UTC(1899,0,1)/86400000),hi=Math.ceil(Date.UTC(2275,0,1)/86400000);
+  const target=year*12+month-1;
+  while(lo<hi) {
+    const mid=Math.floor((lo+hi)/2),p=calendarParts(new Date(mid*86400000).toISOString().slice(0,10));
+    if(p.year*12+p.month-1<target)lo=mid+1;else hi=mid;
+  }
+  monthStarts.set(key,lo);return lo;
+}
+export function hijriMonthLength(year:number,month:number) {
+  return hijriMonthStart(month===12?year+1:year,month===12?1:month+1)-hijriMonthStart(year,month);
+}
+export function hijriToISO(year:number,month:number,day:number):string {
+  if(!Number.isInteger(day)||day<1||day>hijriMonthLength(year,month)) throw new RangeError('Invalid Hijri day');
+  return new Date((hijriMonthStart(year,month)+day-1)*86400000).toISOString().slice(0,10);
+}
+export function formatLeaveDate(value:string):string {
+  if(!value||!validISODate(value)) return '—';
+  const p=hijriParts(value);return `${p.year}/${String(p.month).padStart(2,'0')}/${String(p.day).padStart(2,'0')} هـ`;
+}
+export function addHijriMonths(value:string,months:number):string {
+  const p=hijriParts(value),index=p.year*12+p.month-1+months,year=Math.floor(index/12),month=index%12+1;
+  return hijriToISO(year,month,Math.min(p.day,hijriMonthLength(year,month)));
 }
 export function stayStatus(employee: Pick<Employee,'iqamaNo'|'saudiEntryDate'>, leaves: WorkerLeave[], asOf = saudiToday()) {
   if(!validISODate(asOf)) asOf=saudiToday();
@@ -27,9 +60,10 @@ export function stayStatus(employee: Pick<Employee,'iqamaNo'|'saudiEntryDate'>, 
   const abroad=own.find(leave=>leave.departureDate<=asOf && (!leave.actualReturnDate || leave.actualReturnDate>asOf));
   if(!start || !validISODate(start)) return { start:'', due:'',months:0,daysRemaining:0,eligible:false,abroad:!!abroad,known:false };
   const end=abroad?.departureDate || asOf;
-  let months=Math.max(0,(Number(end.slice(0,4))-Number(start.slice(0,4)))*12+Number(end.slice(5,7))-Number(start.slice(5,7)));
-  if(addCalendarMonths(start,months)>end) months=Math.max(0,months-1);
-  const due=addCalendarMonths(start,24), daysRemaining=Math.max(0,Math.ceil((Date.parse(due+'T12:00:00Z')-Date.parse(end+'T12:00:00Z'))/86400000));
+  const startHijri=hijriParts(start),endHijri=hijriParts(end);
+  let months=Math.max(0,(endHijri.year-startHijri.year)*12+endHijri.month-startHijri.month);
+  if(addHijriMonths(start,months)>end) months=Math.max(0,months-1);
+  const due=addHijriMonths(start,24), daysRemaining=Math.max(0,Math.ceil((Date.parse(due+'T12:00:00Z')-Date.parse(end+'T12:00:00Z'))/86400000));
   return {start,due,months,daysRemaining,eligible:end>=due,abroad:!!abroad,known:true};
 }
 export function tripHijriMonths(from: string, to: string): string[] {

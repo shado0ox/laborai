@@ -1,4 +1,4 @@
-import { stayStatus, validISODate, saudiToday, tripHijriMonths, approvedExemptMonths, chargeableKafalaMonths } from './src/utils/workerLeave';
+import { formatLeaveDate, stayStatus, validISODate, saudiToday, tripHijriMonths, approvedExemptMonths, chargeableKafalaMonths } from './src/utils/workerLeave';
 import type { WorkerLeave } from './src/types';
 import { validHijriPeriod } from './src/utils/accounting';
 import { getPaymentKind } from './src/utils/paymentKind';
@@ -1432,7 +1432,7 @@ app.delete("/api/employees/:iqamaNo", requireAuth, async (req: any, res: any) =>
 
 
 // Worker travel and discretionary kafala exemption policy (not an immigration permission service).
-const leaveDate = z.string().refine(validISODate, 'اختر تاريخًا ميلاديًا صحيحًا.');
+const leaveDate = z.string().refine(validISODate, 'اختر تاريخًا صحيحًا.');
 const leaveSchema = z.object({ id:z.string().min(1).max(128), iqamaNo:z.string().min(1), departureDate:leaveDate,
   expectedReturnDate:leaveDate, actualReturnDate:leaveDate.optional(), policy:z.enum(['normal','eligible','exception']),
   exemptMonths:z.array(z.string().regex(/^1[3-6][0-9]{2}-(0[1-9]|1[0-2])$/)).max(120), exceptionReason:z.string().max(2000).optional() });
@@ -1494,7 +1494,7 @@ app.post('/api/worker-leaves',requireAuth,requireAdmin,async(req:any,res)=>{
     const latest=own.map(l=>l.actualReturnDate!).sort().at(-1) || baseline;
     if(entry.departureDate<latest || entry.expectedReturnDate<entry.departureDate || (entry.actualReturnDate && (entry.actualReturnDate<entry.departureDate || entry.actualReturnDate>saudiToday())))return await reject('راجع ترتيب تواريخ الدخول والسفر والعودة؛ العودة الفعلية لا تتجاوز اليوم.');
     const status=stayStatus({iqamaNo:entry.iqamaNo,saudiEntryDate:baseline},own,entry.departureDate);
-    if(entry.policy==='eligible' && !status.eligible)return await reject(`لم يكمل العامل سنتين. موعد الاستحقاق ${status.due}. استخدم استثناءً مسببًا عند الموافقة المبكرة.`);
+    if(entry.policy==='eligible' && !status.eligible)return await reject(`لم يكمل العامل سنتين. موعد الاستحقاق ${formatLeaveDate(status.due)}. استخدم استثناءً مسببًا عند الموافقة المبكرة.`);
     if(entry.policy==='exception' && (!entry.exceptionReason || entry.exceptionReason.trim().length<5))return await reject('اكتب سبب الموافقة الاستثنائية قبل السنتين.');
     const allowed=tripHijriMonths(entry.departureDate,entry.actualReturnDate || entry.expectedReturnDate);
     if(!allowed.length || entry.exemptMonths.some(month=>!allowed.includes(month)))return await reject('الأشهر المعفاة يجب أن تتداخل مع فترة السفر المحددة.');
