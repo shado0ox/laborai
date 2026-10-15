@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS employees (
     added_date VARCHAR(100),
     kafala_start_month VARCHAR(50),
     kafala_start_year VARCHAR(10),
+    saudi_entry_date DATE,
     tenant_id VARCHAR(128) NOT NULL DEFAULT '',
     PRIMARY KEY (tenant_id, iqama_no)
 );
@@ -46,6 +47,7 @@ CREATE TABLE IF NOT EXISTS payments (
     category VARCHAR(20),
     balance_included BOOLEAN,
     kafala_period JSONB,
+    kafala_exempt_months JSONB,
     cash_account VARCHAR(10),
     date DATE NOT NULL,
     notes TEXT,
@@ -126,3 +128,16 @@ CREATE TABLE IF NOT EXISTS shop_entries (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS shop_reference_unique ON shop_entries (tenant_id, branch, reference)
 WHERE reference IS NOT NULL AND reference <> '';
+
+
+CREATE TABLE IF NOT EXISTS worker_leaves (
+    tenant_id VARCHAR(128) NOT NULL DEFAULT '', id VARCHAR(128) NOT NULL,
+    iqama_no VARCHAR(15) NOT NULL, departure_date DATE NOT NULL,
+    expected_return_date DATE NOT NULL, actual_return_date DATE,
+    policy VARCHAR(20) NOT NULL, exempt_months JSONB NOT NULL DEFAULT '[]', exception_reason TEXT,
+    cancelled BOOLEAN NOT NULL DEFAULT FALSE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    approved_by VARCHAR(128) NOT NULL, PRIMARY KEY (tenant_id,id),
+    CONSTRAINT worker_leaves_employee_fk FOREIGN KEY (tenant_id,iqama_no) REFERENCES employees(tenant_id,iqama_no) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS worker_leaves_employee_date ON worker_leaves (tenant_id,iqama_no,departure_date);

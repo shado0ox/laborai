@@ -1,3 +1,5 @@
+import { stayStatus, validISODate, saudiToday, tripHijriMonths, approvedExemptMonths, chargeableKafalaMonths } from './src/utils/workerLeave';
+import type { WorkerLeave } from './src/types';
 import { validHijriPeriod } from './src/utils/accounting';
 import { getPaymentKind } from './src/utils/paymentKind';
 import express from "express";
@@ -189,6 +191,7 @@ const hijriPeriodSchema = z.object({
 }).refine(validHijriPeriod, { message: "فترة الكفالة غير صحيحة أو فترة الإعفاء خارجها." });
 
 const paymentSchema = z.object({
+  kafalaExemptMonths: z.array(z.string().regex(/^1[3-6][0-9]{2}-(0[1-9]|1[0-2])$/)).max(120).optional(),
   category: z.enum(["kafala", "iqama", "insurance", "other"]).optional(),
   balanceIncluded: z.boolean().optional(),
   kafalaPeriod: hijriPeriodSchema.optional(),
@@ -810,6 +813,16 @@ async function initializeTables() {
 
     await client.query("CREATE UNIQUE INDEX IF NOT EXISTS shop_reference_unique ON shop_entries (tenant_id, branch, reference) WHERE reference IS NOT NULL AND reference <> ''");
 
+    await client.query('ALTER TABLE employees ADD COLUMN IF NOT EXISTS saudi_entry_date DATE');
+    await client.query('ALTER TABLE payments ADD COLUMN IF NOT EXISTS kafala_exempt_months JSONB');
+    await client.query(`CREATE TABLE IF NOT EXISTS worker_leaves (
+      tenant_id VARCHAR(128) NOT NULL DEFAULT '', id VARCHAR(128) NOT NULL, iqama_no VARCHAR(15) NOT NULL,
+      departure_date DATE NOT NULL, expected_return_date DATE NOT NULL, actual_return_date DATE,
+      policy VARCHAR(20) NOT NULL, exempt_months JSONB NOT NULL DEFAULT '[]', exception_reason TEXT,
+      cancelled BOOLEAN NOT NULL DEFAULT FALSE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), approved_by VARCHAR(128) NOT NULL,
+      PRIMARY KEY (tenant_id,id)
+    )`);
+
     // Non-destructive upgrade: tenant + record ID is the ownership boundary.
     await client.query("BEGIN");
     try {
@@ -830,6 +843,13 @@ async function initializeTables() {
       await client.query("ROLLBACK");
       throw error;
     }
+
+    await client.query(`DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='worker_leaves'::regclass AND conname='worker_leaves_employee_fk') THEN
+        ALTER TABLE worker_leaves ADD CONSTRAINT worker_leaves_employee_fk FOREIGN KEY (tenant_id,iqama_no) REFERENCES employees(tenant_id,iqama_no) ON DELETE CASCADE;
+      END IF;
+    END $$`);
+    await client.query('CREATE INDEX IF NOT EXISTS worker_leaves_employee_date ON worker_leaves (tenant_id,iqama_no,departure_date)');
 
     // Ensure Developer Account exists in the users table
     const devCheck = await client.query("SELECT * FROM users WHERE email = $1", [DEV_EMAIL]);
@@ -911,6 +931,7 @@ let fallbackPricing: Map<string, any> = new Map([
 ]);
 let fallbackGeneralLedger: any[] = [];
 let fallbackShopEntries: any[] = [];
+let fallbackWorkerLeaves: any[] = [];
 
 
 // --- API ROUTES ---
@@ -1284,6 +1305,7 @@ app.get("/api/employees", requireAuth, async (req: any, res: any) => {
         iqamaNo: r.iqama_no,
         name: r.name,
         employeeId: r.employee_id || undefined,
+        saudiEntryDate: r.saudi_entry_date || undefined,
         iqamaExpiry: r.iqama_expiry ? String(r.iqama_expiry).slice(0, 10) : "",
         mobile: r.mobile || "",
         branch: r.branch,
@@ -1362,7 +1384,7 @@ app.post("/api/employees", requireAuth, async (req: any, res: any) => {
       if (!saved.length) return res.status(403).json({ error: "الموظف خارج نطاق فرعك." });
       return res.json({ success: true, employee: e });
     } else {
-      const fullEmp = { ...e, tenantId };
+      const fullEmp = { ...e, saudiEntryDate: existing?.saudiEntryDate, tenantId };
       const existingIdx = fallbackEmployees.findIndex((item) => item.iqamaNo === e.iqamaNo && (item.tenantId || "") === tenantId);
       if (existingIdx !== -1) {
         fallbackEmployees[existingIdx] = fullEmp;
@@ -1390,6 +1412,7 @@ app.delete("/api/employees/:iqamaNo", requireAuth, async (req: any, res: any) =>
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+        await client.query("DELETE FROM worker_leaves WHERE iqama_no = $1 AND tenant_id = $2", [iqamaNo, tenantId]);
         await client.query("DELETE FROM payments WHERE iqama_no = $1 AND tenant_id = $2", [iqamaNo, tenantId]);
         await client.query("DELETE FROM employees WHERE iqama_no = $1 AND tenant_id = $2", [iqamaNo, tenantId]);
         await client.query("COMMIT");
@@ -1399,6 +1422,7 @@ app.delete("/api/employees/:iqamaNo", requireAuth, async (req: any, res: any) =>
     } else {
       fallbackEmployees = fallbackEmployees.filter((e) => !(e.iqamaNo === iqamaNo && e.tenantId === tenantId));
       fallbackPayments = fallbackPayments.filter((p) => !(p.iqamaNo === iqamaNo && p.tenantId === tenantId));
+      fallbackWorkerLeaves = fallbackWorkerLeaves.filter(l=>!(l.iqamaNo===iqamaNo && l.tenantId===tenantId));
       return res.json({ success: true });
     }
   } catch (err: any) {
@@ -1406,6 +1430,105 @@ app.delete("/api/employees/:iqamaNo", requireAuth, async (req: any, res: any) =>
   }
 });
 
+
+// Worker travel and discretionary kafala exemption policy (not an immigration permission service).
+const leaveDate = z.string().refine(validISODate, 'اختر تاريخًا ميلاديًا صحيحًا.');
+const leaveSchema = z.object({ id:z.string().min(1).max(128), iqamaNo:z.string().min(1), departureDate:leaveDate,
+  expectedReturnDate:leaveDate, actualReturnDate:leaveDate.optional(), policy:z.enum(['normal','eligible','exception']),
+  exemptMonths:z.array(z.string().regex(/^1[3-6][0-9]{2}-(0[1-9]|1[0-2])$/)).max(120), exceptionReason:z.string().max(2000).optional() });
+const mapLeave = (row:any):WorkerLeave => ({id:row.id,iqamaNo:row.iqama_no,departureDate:row.departure_date,
+  expectedReturnDate:row.expected_return_date,actualReturnDate:row.actual_return_date || undefined,policy:row.policy,
+  exemptMonths:row.exempt_months || [],exceptionReason:row.exception_reason || '',cancelled:row.cancelled,createdAt:row.created_at,approvedBy:row.approved_by});
+async function loadWorkerLeaves(tenantId:string,iqamaNo?:string,client?:any):Promise<WorkerLeave[]> {
+  if(!pool) return fallbackWorkerLeaves.filter(l=>l.tenantId===tenantId && (!iqamaNo || l.iqamaNo===iqamaNo));
+  const sql='SELECT * FROM worker_leaves WHERE tenant_id=$1'+(iqamaNo?' AND iqama_no=$2':'')+' ORDER BY departure_date,id';
+  const result=await (client || pool).query(sql,iqamaNo?[tenantId,iqamaNo]:[tenantId]);
+  return result.rows.map(mapLeave);
+}
+async function leaveAudit(req:any,tenantId:string,text:string,client?:any) {
+  const log={id:crypto.randomUUID(),type:'update',text,user:req.user.name,time:new Date().toISOString(),tenantId};
+  if(pool) await (client || pool).query('INSERT INTO activity_logs (id,type,text,"user",time,tenant_id) VALUES ($1,$2,$3,$4,$5,$6)',[log.id,log.type,log.text,log.user,log.time,tenantId]);
+  else fallbackLogs.unshift(log);
+}
+app.get('/api/worker-leaves',requireAuth,async(req:any,res)=>{
+  try {
+    const tenantId=getTenantId(req),leaves=await loadWorkerLeaves(tenantId);
+    if(req.user.role!=='branch') return res.json(leaves);
+    const workers=pool?(await runQuery('SELECT iqama_no FROM employees WHERE tenant_id=? AND branch=?',[tenantId,req.user.branch])).map((e:any)=>e.iqama_no):fallbackEmployees.filter(e=>e.tenantId===tenantId && e.branch===req.user.branch).map(e=>e.iqamaNo);
+    return res.json(leaves.filter(l=>workers.includes(l.iqamaNo)));
+  } catch(error){sendServerError(res,error);}
+});
+app.post('/api/employees/:iqamaNo/saudi-entry',requireAuth,requireAdmin,async(req:any,res)=>{
+  const parsed=z.object({date:leaveDate}).safeParse(req.body);
+  if(!parsed.success || parsed.data.date>saudiToday()) return res.status(400).json({error:'اختر تاريخ دخول فعليًا لا يتجاوز اليوم.'});
+  const tenantId=getTenantId(req); let client:any;
+  try {
+    const employee=await findEmployee(tenantId,req.params.iqamaNo);
+    if(!employee || !inBranch(req,employee.branch)) return res.status(404).json({error:'العامل غير موجود في نطاقك.'});
+    if(pool){client=await pool.connect();await client.query('BEGIN');await client.query('SELECT iqama_no FROM employees WHERE tenant_id=$1 AND iqama_no=$2 FOR UPDATE',[tenantId,req.params.iqamaNo]);}
+    if((await loadWorkerLeaves(tenantId,req.params.iqamaNo,client)).some(l=>!l.cancelled)) {if(client)await client.query('ROLLBACK');return res.status(409).json({error:'لا يمكن تغيير تاريخ الأساس بعد تسجيل إجازات معتمدة. راجع السجل أولًا.'});}
+    if(client)await client.query('UPDATE employees SET saudi_entry_date=$1 WHERE tenant_id=$2 AND iqama_no=$3',[parsed.data.date,tenantId,req.params.iqamaNo]);
+    else employee.saudiEntryDate=parsed.data.date;
+    await leaveAudit(req,tenantId,`تحديد بداية متابعة الإجازة للعامل ${req.params.iqamaNo}: ${parsed.data.date}`,client);
+    if(client)await client.query('COMMIT');return res.json({success:true});
+  } catch(error){if(client)await client.query('ROLLBACK');sendServerError(res,error);}finally{client?.release();}
+});
+app.post('/api/worker-leaves',requireAuth,requireAdmin,async(req:any,res)=>{
+  const parsed=leaveSchema.safeParse(req.body);if(!parsed.success)return res.status(400).json({error:formatZodError(parsed.error)});
+  const entry=parsed.data,tenantId=getTenantId(req);let client:any;
+  const reject=async(message:string,status=400)=>{if(client)await client.query('ROLLBACK');return res.status(status).json({error:message});};
+  try {
+    const employee=await findEmployee(tenantId,entry.iqamaNo);
+    if(!employee || !inBranch(req,employee.branch))return res.status(404).json({error:'العامل غير موجود في نطاقك.'});
+    if(pool){client=await pool.connect();await client.query('BEGIN');const locked=await client.query('SELECT * FROM employees WHERE tenant_id=$1 AND iqama_no=$2 FOR UPDATE',[tenantId,entry.iqamaNo]);if(!locked.rows.length)return await reject('العامل غير موجود.',404);employee.saudi_entry_date=locked.rows[0].saudi_entry_date;}
+    const all=await loadWorkerLeaves(tenantId,undefined,client),sameId=all.find(l=>l.id===entry.id);
+    if(sameId) {
+      const same=sameId.iqamaNo===entry.iqamaNo && sameId.departureDate===entry.departureDate && sameId.expectedReturnDate===entry.expectedReturnDate && (sameId.actualReturnDate||'')===(entry.actualReturnDate||'') && sameId.policy===entry.policy && JSON.stringify([...sameId.exemptMonths].sort())===JSON.stringify([...new Set(entry.exemptMonths)].sort()) && (sameId.exceptionReason||'')===(entry.exceptionReason||'') && !sameId.cancelled;
+      if(!same)return await reject('معرف الإجازة مستخدم بالفعل.',409);if(client)await client.query('COMMIT');return res.json({success:true,leave:sameId});
+    }
+    if(employee.status==='archived')return await reject('العامل مؤرشف؛ لا يمكن اعتماد إجازة جديدة له.',409);
+    const own=all.filter(l=>l.iqamaNo===entry.iqamaNo && !l.cancelled);
+    const baseline=employee.saudi_entry_date || employee.saudiEntryDate;
+    if(!baseline)return await reject('حدد تاريخ أول دخول أو آخر عودة قبل تسجيل الإجازة.');
+    if(own.some(l=>!l.actualReturnDate))return await reject('توجد إجازة مخططة أو سفر لم تسجل عودته بعد.',409);
+    const latest=own.map(l=>l.actualReturnDate!).sort().at(-1) || baseline;
+    if(entry.departureDate<latest || entry.expectedReturnDate<entry.departureDate || (entry.actualReturnDate && (entry.actualReturnDate<entry.departureDate || entry.actualReturnDate>saudiToday())))return await reject('راجع ترتيب تواريخ الدخول والسفر والعودة؛ العودة الفعلية لا تتجاوز اليوم.');
+    const status=stayStatus({iqamaNo:entry.iqamaNo,saudiEntryDate:baseline},own,entry.departureDate);
+    if(entry.policy==='eligible' && !status.eligible)return await reject(`لم يكمل العامل سنتين. موعد الاستحقاق ${status.due}. استخدم استثناءً مسببًا عند الموافقة المبكرة.`);
+    if(entry.policy==='exception' && (!entry.exceptionReason || entry.exceptionReason.trim().length<5))return await reject('اكتب سبب الموافقة الاستثنائية قبل السنتين.');
+    const allowed=tripHijriMonths(entry.departureDate,entry.actualReturnDate || entry.expectedReturnDate);
+    if(!allowed.length || entry.exemptMonths.some(month=>!allowed.includes(month)))return await reject('الأشهر المعفاة يجب أن تتداخل مع فترة السفر المحددة.');
+    if(entry.policy!=='normal' && !entry.exemptMonths.length)return await reject('حدد الأشهر المعفاة يدويًا أو اختر كفالة عادية.');
+    if(entry.policy==='normal' && entry.exemptMonths.length)return await reject('الإجازة بالكفالة العادية لا تسمح بأشهر معفاة.');
+    const saved={...entry,exemptMonths:[...new Set(entry.exemptMonths)].sort(),cancelled:false,approvedBy:req.user.uid,createdAt:new Date().toISOString()};
+    if(client)await client.query('INSERT INTO worker_leaves (tenant_id,id,iqama_no,departure_date,expected_return_date,actual_return_date,policy,exempt_months,exception_reason,approved_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',[tenantId,saved.id,saved.iqamaNo,saved.departureDate,saved.expectedReturnDate,saved.actualReturnDate||null,saved.policy,JSON.stringify(saved.exemptMonths),saved.exceptionReason||null,req.user.uid]);
+    else fallbackWorkerLeaves.push({...saved,tenantId});
+    await leaveAudit(req,tenantId,`تسجيل إجازة ${entry.id} للعامل ${entry.iqamaNo}؛ السياسة ${entry.policy}؛ الأشهر المعفاة ${saved.exemptMonths.join(', ') || 'لا يوجد'}؛ ${entry.exceptionReason || ''}`,client);
+    if(client)await client.query('COMMIT');return res.status(201).json({success:true,leave:saved});
+  } catch(error){if(client)await client.query('ROLLBACK');sendServerError(res,error);}finally{client?.release();}
+});
+app.post('/api/worker-leaves/:id/:action',requireAuth,requireAdmin,async(req:any,res)=>{
+  const tenantId=getTenantId(req),action=req.params.action;if(!['return','cancel'].includes(action))return res.status(404).json({error:'الإجراء غير موجود.'});
+  let client:any;
+  try {
+    const leave=(await loadWorkerLeaves(tenantId)).find(l=>l.id===req.params.id);if(!leave)return res.status(404).json({error:'الإجازة غير موجودة في شركتك.'});
+    const employee=await findEmployee(tenantId,leave.iqamaNo);if(!employee || !inBranch(req,employee.branch))return res.status(404).json({error:'العامل غير موجود.'});
+    if(pool){client=await pool.connect();await client.query('BEGIN');await client.query('SELECT iqama_no FROM employees WHERE tenant_id=$1 AND iqama_no=$2 FOR UPDATE',[tenantId,leave.iqamaNo]);}
+    const fresh=(await loadWorkerLeaves(tenantId,leave.iqamaNo,client)).find(l=>l.id===leave.id)!;
+    if(action==='return') {
+      const date=req.body?.date;
+      if(fresh.cancelled || !date || !validISODate(date) || date<fresh.departureDate || date>saudiToday() || fresh.actualReturnDate){if(client)await client.query('ROLLBACK');return res.status(409).json({error:'راجع تاريخ العودة؛ لا يمكن تعديل إجازة ملغاة أو عودة سبق تسجيلها.'});}
+      if(client)await client.query('UPDATE worker_leaves SET actual_return_date=$1 WHERE tenant_id=$2 AND id=$3',[date,tenantId,leave.id]);
+      else Object.assign(fallbackWorkerLeaves.find(l=>l.tenantId===tenantId&&l.id===leave.id),{actualReturnDate:date});
+    } else {
+      if(typeof req.body?.reason!=='string' || req.body.reason.trim().length<5 || req.body.reason.length>2000){if(client)await client.query('ROLLBACK');return res.status(400).json({error:'اكتب سبب إلغاء الإجازة. الإلغاء لا يعدّل قيودًا مالية سابقة.'});}
+      if(client)await client.query('UPDATE worker_leaves SET cancelled=TRUE WHERE tenant_id=$1 AND id=$2',[tenantId,leave.id]);
+      else Object.assign(fallbackWorkerLeaves.find(l=>l.tenantId===tenantId&&l.id===leave.id),{cancelled:true});
+    }
+    await leaveAudit(req,tenantId,`${action==='return'?'تسجيل العودة':'إلغاء الإجازة'} ${leave.id}: ${req.body?.date || req.body?.reason}`,client);
+    if(client)await client.query('COMMIT');return res.json({success:true});
+  }catch(error){if(client)await client.query('ROLLBACK');sendServerError(res,error);}finally{client?.release();}
+});
 
 // 3. Payments API
 app.get("/api/payments", requireAuth, async (req: any, res: any) => {
@@ -1427,7 +1550,7 @@ app.get("/api/payments", requireAuth, async (req: any, res: any) => {
         type: r.type,
         transactionKind: getPaymentKind({ type: r.type, transactionKind: r.transaction_kind }),
         category: r.category || undefined, balanceIncluded: r.balance_included ?? true,
-        kafalaPeriod: r.kafala_period || undefined, cashAccount: r.cash_account || undefined,
+        kafalaExemptMonths: r.kafala_exempt_months || [], kafalaPeriod: r.kafala_period || undefined, cashAccount: r.cash_account || undefined,
         date: r.date ? String(r.date).slice(0, 10) : "",
         notes: r.notes || undefined,
         hijriMonth: r.hijri_month || undefined,
@@ -1460,16 +1583,26 @@ app.post("/api/payments", requireAuth, async (req: any, res: any) => {
       : fallbackPayments.find(item => item.id === p.id && (item.tenantId || "") === tenantId);
     if (existing && !inBranch(req, existing.branch)) return res.status(403).json({ error: "الدفعة خارج نطاق فرعك." });
     if (existing && (existing.iqama_no || existing.iqamaNo) !== p.iqamaNo) return res.status(409).json({ error: "لا يمكن نقل الدفعة إلى موظف آخر." });
+    p.kafalaExemptMonths=existing?.kafala_exempt_months || existing?.kafalaExemptMonths || [];
+    if(!existing && (p.category==='kafala' || p.type.includes('كفالة')) && p.kafalaPeriod) {
+      const approved=approvedExemptMonths(await loadWorkerLeaves(tenantId,p.iqamaNo),p.iqamaNo,p.kafalaPeriod);
+      p.kafalaExemptMonths=approved;
+      if(approved.length && p.transactionKind==='debt') {
+        const settings=pool?(await runQuery('SELECT kafala FROM pricing_settings WHERE tenant_id=?',[tenantId]))[0]:fallbackPricing.get(tenantId);
+        const maximum=chargeableKafalaMonths(p.kafalaPeriod,approved)*Number(settings?.kafala ?? 250);
+        if(p.amount>maximum+0.005)return res.status(400).json({error:'المبلغ يتجاوز المستحق بعد أشهر الإجازة المعفاة. حدّث الفترة والمبلغ؛ الفترة المعفاة بالكامل لا تحتاج قيد مديونية.'});
+      }
+    }
     p.branch = employee.branch;
     p.name = employee.name;
     if (pool) {
       // Cleaned PostgreSQL upsert
       const saved = await runQuery(
-        `INSERT INTO payments (id, iqama_no, name, branch, amount, type, date, notes, hijri_month, hijri_year, tenant_id, transaction_kind, category, balance_included, kafala_period, cash_account)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO payments (id, iqama_no, name, branch, amount, type, date, notes, hijri_month, hijri_year, tenant_id, transaction_kind, category, balance_included, kafala_period, cash_account, kafala_exempt_months)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (tenant_id, id) DO UPDATE SET
            name=EXCLUDED.name, branch=EXCLUDED.branch, amount=EXCLUDED.amount, type=EXCLUDED.type, 
-           date=EXCLUDED.date, notes=EXCLUDED.notes, hijri_month=EXCLUDED.hijri_month, hijri_year=EXCLUDED.hijri_year, transaction_kind=EXCLUDED.transaction_kind, category=EXCLUDED.category, balance_included=EXCLUDED.balance_included, kafala_period=EXCLUDED.kafala_period, cash_account=EXCLUDED.cash_account
+           date=EXCLUDED.date, notes=EXCLUDED.notes, hijri_month=EXCLUDED.hijri_month, hijri_year=EXCLUDED.hijri_year, transaction_kind=EXCLUDED.transaction_kind, category=EXCLUDED.category, balance_included=EXCLUDED.balance_included, kafala_period=EXCLUDED.kafala_period, cash_account=EXCLUDED.cash_account, kafala_exempt_months=EXCLUDED.kafala_exempt_months
            WHERE (? = 'admin' OR payments.branch = ?) AND payments.iqama_no = EXCLUDED.iqama_no RETURNING id`,
         [
           p.id,
@@ -1482,7 +1615,7 @@ app.post("/api/payments", requireAuth, async (req: any, res: any) => {
           p.notes || null,
           p.hijriMonth || null,
           p.hijriYear || null,
-          tenantId, p.transactionKind, p.category || null, p.balanceIncluded ?? true, p.kafalaPeriod ? JSON.stringify(p.kafalaPeriod) : null, p.cashAccount || 'cash', req.user.role, req.user.branch || ""
+          tenantId, p.transactionKind, p.category || null, p.balanceIncluded ?? true, p.kafalaPeriod ? JSON.stringify(p.kafalaPeriod) : null, p.cashAccount || 'cash', JSON.stringify(p.kafalaExemptMonths || []), req.user.role, req.user.branch || ""
         ]
       );
       if (!saved.length) return res.status(403).json({ error: "الدفعة خارج نطاق فرعك أو تخص موظفاً آخر." });
@@ -1989,7 +2122,7 @@ app.post("/api/system/wipe", requireAuth, wipeLimiter, async (req: any, res: any
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
-        for (const table of ["payments", "employees", "activity_logs", "general_ledger", "shop_entries", "branches"]) {
+        for (const table of ["payments", "employees", "activity_logs", "general_ledger", "shop_entries", "worker_leaves", "branches"]) {
           await client.query(`DELETE FROM ${table} WHERE COALESCE(tenant_id, '') = $1`, [tenantId]);
         }
         await client.query('INSERT INTO activity_logs (id, type, text, "user", time, tenant_id) VALUES ($1,$2,$3,$4,$5,$6)', [wipeLog.id, wipeLog.type, wipeLog.text, wipeLog.user, wipeLog.time, tenantId]);
@@ -2004,6 +2137,7 @@ app.post("/api/system/wipe", requireAuth, wipeLimiter, async (req: any, res: any
         fallbackLogs = fallbackLogs.filter((l) => l.tenantId !== tenantId);
         fallbackGeneralLedger = fallbackGeneralLedger.filter((g) => g.tenantId !== tenantId);
         fallbackShopEntries = fallbackShopEntries.filter(e => e.tenantId !== tenantId);
+        fallbackWorkerLeaves = fallbackWorkerLeaves.filter(e=>e.tenantId!==tenantId);
         fallbackBranches.delete(tenantId);
       } else {
         fallbackEmployees = fallbackEmployees.filter(e => !!e.tenantId);
@@ -2011,6 +2145,7 @@ app.post("/api/system/wipe", requireAuth, wipeLimiter, async (req: any, res: any
         fallbackLogs = fallbackLogs.filter(l => !!l.tenantId);
         fallbackGeneralLedger = fallbackGeneralLedger.filter(g => !!g.tenantId);
         fallbackShopEntries = fallbackShopEntries.filter(e => !!e.tenantId);
+        fallbackWorkerLeaves = fallbackWorkerLeaves.filter(e=>!!e.tenantId);
         fallbackBranches.delete("");
       }
       fallbackLogs.push(wipeLog);

@@ -35,6 +35,8 @@ with sync_playwright() as p:
     assert saved.value.status==200
     expect(page.get_by_role('button',name='تسجيل التحصيل',exact=True)).to_have_count(0)
     statement()
+    assert 'شهر كفالة متبق' not in page.locator('main').inner_text()
+    expect(page.get_by_text('لا توجد مستحقات مسجلة غير مسددة على العامل.',exact=True)).to_be_visible()
     label=page.get_by_text('آخر شهر سُجل له تحصيل كفالة',exact=True)
     expect(label.locator('..')).to_contain_text('ربيع الآخر 1448')
     page.reload(); page.wait_for_load_state('networkidle')

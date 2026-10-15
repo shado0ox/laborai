@@ -78,35 +78,13 @@ export default function LedgerStatement({
   const lastCalculatedMonthText = lastCalculatedKafala(periodPayments);
   const lastPaidMonthText = lastPaidKafala(periodPayments, employee, pricing);
 
-  // Pre-calculate estimate remaining months
+  // Residence validity is informational; it must never invent future kafala debt.
   let remainingMonthsText = '';
   if (employee.iqamaExpiry) {
-    const today = new Date();
-    today.setHours(0,0,0,0);
-    const expiry = new Date(employee.iqamaExpiry + 'T00:00:00');
-    const diffTime = expiry.getTime() - today.getTime();
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    
-    if (diffDays > 0) {
-      const todayH = g2hObj(today);
-      const expiryH = g2hObj(expiry);
-      if (todayH && expiryH) {
-        let monthsCount = (expiryH.y - todayH.y) * 12 + (expiryH.m - todayH.m);
-        if (monthsCount < 0) monthsCount = 0;
-        let estimateCost = 0;
-        for (let i = 0; i < monthsCount; i++) {
-          const currentM = ((todayH.m - 1 + i) % 12) + 1;
-          if (!(currentM === 9 && pricing.ramadanFree)) {
-            estimateCost += pricing.kafala;
-          }
-        }
-        remainingMonthsText = `${monthsCount} شهر كفالة متبقّية — القيمة التقديرية: ${estimateCost.toLocaleString('ar-SA')} ريال`;
-      } else {
-        remainingMonthsText = `${diffDays} يوم متبقّي على انتهاء الإقامة`;
-      }
-    } else {
-      remainingMonthsText = '⚠️ الإقامة منتهية الصلاحية حالياً';
-    }
+    const today = new Date(); today.setHours(0,0,0,0);
+    const expiry = new Date(employee.iqamaExpiry+'T00:00:00');
+    const days = Math.ceil((expiry.getTime()-today.getTime())/86400000);
+    remainingMonthsText = days>=0 ? `صلاحية الإقامة المتبقية: ${days} يومًا. هذا تنبيه للإقامة وليس مبلغ كفالة مستحقًا.` : '⚠️ الإقامة منتهية الصلاحية؛ حالة المستحقات موضحة في الرصيد الفعلي أدناه.';
   }
 
   // Generate complete interactive double-entry ledger list
@@ -187,7 +165,7 @@ export default function LedgerStatement({
       hijriLabel = 'إقامة';
     }
 
-    const desc = (isCashReceipt(p) || isDebtEntry(p) || p.type === PAYMENT_KIND_LABELS[getPaymentKind(p)] ? p.type : `${PAYMENT_KIND_LABELS[getPaymentKind(p)]}: ${p.type}`) + (isRamadan && pricing.ramadanFree && p.amount === 0 ? ' 🎁 عفو رمضان المجاني' : '') + (p.notes ? ` — ${p.notes}` : '');
+    const desc = (isCashReceipt(p) || isDebtEntry(p) || p.type === PAYMENT_KIND_LABELS[getPaymentKind(p)] ? p.type : `${PAYMENT_KIND_LABELS[getPaymentKind(p)]}: ${p.type}`) + (isRamadan && pricing.ramadanFree && p.amount === 0 ? ' 🎁 عفو رمضان المجاني' : '') + (p.notes ? ` — ${p.notes}` : '') + (p.kafalaExemptMonths?.length ? ` — أشهر إعفاء الإجازة: ${p.kafalaExemptMonths.map(key=>{const [year,month]=key.split('-').map(Number);return `${AR_MONTH_NAMES[month]} ${year}`;}).join('، ')}` : '');
     
     if (isDebt) {
       ledger.push({
@@ -513,7 +491,7 @@ export default function LedgerStatement({
         {remainingMonthsText && (
           <div className="mt-4 bg-[#f0f9ff] text-[#0284c7] px-4 py-3 rounded-xl flex items-center gap-2 text-xs font-bold border border-sky-100">
             <Sparkles className="w-4 h-4" />
-            <span>{remainingMonthsText}</span>
+            <span>{remainingMonthsText}<span className="block mt-1">{finalBalance>0 ? `المستحق المسجل حاليًا: ${finalBalance.toLocaleString()} ريال` : 'لا توجد مستحقات مسجلة غير مسددة على العامل.'}</span></span>
           </div>
         )}
       </div>

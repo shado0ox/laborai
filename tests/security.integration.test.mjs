@@ -1,3 +1,4 @@
+import { tripHijriMonths, chargeableKafalaMonths } from '../src/utils/workerLeave.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -176,6 +177,53 @@ test('PostgreSQL-backed ownership, authentication and persistence', { timeout: 9
     await api('/api/general-ledger','POST',legacyUpdate,adminA);
     assert.equal((await api('/api/general-ledger','GET',undefined,adminA)).find(row=>row.id===entry.id).cashEffect,'noncash');
   });
+  await t.test('worker leave eligibility, exception approval, ownership and exemption accounting are enforced', async () => {
+    const iqama='2000000001';
+    await api(`/api/employees/${iqama}/saudi-entry`,'POST',{date:'2020-01-01'},branch.token,403);
+    await api(`/api/employees/${iqama}/saudi-entry`,'POST',{date:'2020-01-01'},viewer.token,403);
+    await api(`/api/employees/${iqama}/saudi-entry`,'POST',{date:'2020-02-30'},adminA,400);
+    await api(`/api/employees/${iqama}/saudi-entry`,'POST',{date:'2020-01-01'},adminA);
+    assert.equal((await api('/api/employees','GET',undefined,adminA)).find(e=>e.iqamaNo===iqama).saudiEntryDate,'2020-01-01');
+    const months=tripHijriMonths('2022-01-01','2022-03-01');
+    const leave={id:'eligible-trip',iqamaNo:iqama,departureDate:'2022-01-01',expectedReturnDate:'2022-03-01',actualReturnDate:'2022-03-01',policy:'eligible',exemptMonths:[months[1]]};
+    await api('/api/worker-leaves','POST',leave,branch.token,403);
+    const retries=await Promise.all([1,2].map(()=>fetch(base+'/api/worker-leaves',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+adminA},body:JSON.stringify(leave)})));
+    assert.deepEqual(retries.map(response=>response.status).sort(),[200,201]);
+    await api('/api/worker-leaves','POST',leave,adminA);
+    assert.equal((await api('/api/worker-leaves','GET',undefined,adminB)).length,0);
+    await api(`/api/employees/${iqama}/saudi-entry`,'POST',{date:'2020-01-01'},adminB);
+    await api('/api/worker-leaves','POST',leave,adminB,201);
+    assert.equal((await api('/api/worker-leaves','GET',undefined,branch.token)).length,1);
+    await api('/api/worker-leaves/eligible-trip/return','POST',{date:'2022-03-01'},adminB,409);
+    await api(`/api/employees/${iqama}/saudi-entry`,'POST',{date:'2010-01-01'},adminA,409);
+    const early={id:'early-trip',iqamaNo:iqama,departureDate:'2023-12-01',expectedReturnDate:'2024-02-01',policy:'eligible',exemptMonths:[tripHijriMonths('2023-12-01','2024-02-01')[0]]};
+    await api('/api/worker-leaves','POST',early,adminA,400);
+    await api('/api/worker-leaves','POST',{...early,policy:'exception'},adminA,400);
+    await api('/api/worker-leaves','POST',{...early,policy:'normal'},adminA,400);
+    await api('/api/worker-leaves','POST',{...early,policy:'exception',exceptionReason:'Manager approved three months early',exemptMonths:['1499-01']},adminA,400);
+    await api('/api/worker-leaves','POST',{...early,policy:'exception',exceptionReason:'Manager approved three months early'},adminA,201);
+    await api('/api/worker-leaves/early-trip/return','POST',{date:'2024-02-01'},adminB,404);
+    await api('/api/worker-leaves','POST',{...early,id:'overlap'},adminA,409);
+    await api('/api/worker-leaves/early-trip/return','POST',{date:'2024-02-01'},branch.token,403);
+    await api('/api/worker-leaves/early-trip/return','POST',{date:'2023-11-30'},adminA,409);
+    await api('/api/worker-leaves/early-trip/return','POST',{date:'2024-02-01'},adminA);
+    await api('/api/worker-leaves/early-trip/return','POST',{date:'2024-02-02'},adminA,409);
+    const [fy,fm]=months[0].split('-').map(Number),[ty,tm]=months.at(-1).split('-').map(Number);
+    const period={fromYear:fy,fromMonth:fm,toYear:ty,toMonth:tm};
+    const debt={id:'travel-debt',iqamaNo:iqama,name:'ignored',branch:'East',amount:chargeableKafalaMonths(period,[months[1]])*250,type:'قيد مديونية: كفالة',transactionKind:'debt',category:'kafala',balanceIncluded:false,kafalaPeriod:period,date:'2022-01-01'};
+    await api('/api/payments','POST',{...debt,amount:months.length*250},adminA,400);
+    await api('/api/payments','POST',debt,adminA);
+    const stored=(await api('/api/payments','GET',undefined,adminA)).find(row=>row.id===debt.id);
+    assert.deepEqual(stored.kafalaExemptMonths,[months[1]]);
+    const [ey,em]=months[1].split('-').map(Number);
+    await api('/api/payments','POST',{...debt,id:'fully-free',amount:1,kafalaPeriod:{fromMonth:em,fromYear:ey,toMonth:em,toYear:ey}},adminA,400);
+    await api('/api/worker-leaves/eligible-trip/cancel','POST',{reason:'Mistaken travel record'},viewer.token,403);
+    await api('/api/worker-leaves/eligible-trip/cancel','POST',{reason:'Mistaken travel record'},adminA);
+    assert.equal((await api('/api/worker-leaves','GET',undefined,adminA)).find(l=>l.id===leave.id).cancelled,true);
+    assert.deepEqual((await api('/api/payments','GET',undefined,adminA)).find(row=>row.id===debt.id).kafalaExemptMonths,[months[1]]);
+    await api('/api/payments','POST',{...debt,notes:'Annotation only'},adminA);
+    assert.deepEqual((await api('/api/payments','GET',undefined,adminA)).find(row=>row.id===debt.id).kafalaExemptMonths,[months[1]]);
+  });
   await t.test('payment deletion persists and does not delete same ID in another tenant', async () => {
     await api('/api/payments/shared-payment', 'DELETE', undefined, viewer.token, 403);
     await api('/api/payments/shared-payment', 'DELETE', undefined, branch.token);
@@ -212,6 +260,9 @@ test('PostgreSQL-backed ownership, authentication and persistence', { timeout: 9
     assert.equal((await api('/api/logs', 'GET', undefined, developer)).length, 1);
     assert.equal((await api('/api/employees', 'GET', undefined, adminA)).length, 2);
     assert.equal((await api('/api/employees', 'GET', undefined, developer)).length, 0);
+    await api('/api/system/wipe','POST',{password,confirmation:'مسح بيانات مساحة العمل',backupConfirmed:true,targetTenantId:b.tenantId},adminB);
+    assert.equal((await api('/api/worker-leaves','GET',undefined,adminB)).length,0);
+    assert.equal((await api('/api/worker-leaves','GET',undefined,adminA)).length,2);
   });
 });
 

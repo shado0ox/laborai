@@ -1,9 +1,11 @@
+import { stayStatus, saudiToday } from './utils/workerLeave';
+import WorkerLeaveView from './components/WorkerLeaveView';
 import WorkspaceWipeDialog from './components/WorkspaceWipeDialog';
 import { employeeDues } from './utils/accounting';
 import { isEmployeeCredit } from './utils/paymentKind';
 import React, { useState, useEffect } from 'react';
 import { 
-  Employee, Payment, PricingSettings, CompanySettings, UserProfile, ActivityLog 
+  Employee, WorkerLeave, Payment, PricingSettings, CompanySettings, UserProfile, ActivityLog
 } from './types';
 
 import SidebarMenu from './components/SidebarMenu';
@@ -60,6 +62,8 @@ export default function App() {
   });
   const [authToken, setAuthToken] = useState<string | null>(() => sessionStorage.getItem('authToken') || null);
 
+  const [workerLeaves, setWorkerLeaves] = useState<WorkerLeave[]>([]);
+  const [leaveWorker, setLeaveWorker] = useState('');
   const [wipeOpen, setWipeOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [connectionError, setConnectionError] = useState('');
@@ -99,7 +103,7 @@ export default function App() {
     try {
       const response = await fetch(url, { ...options, headers });
       if (response.status === 401 && token) {
-        setCurrentUser(null); setAuthToken(null); setUsers([]); setEmployees([]); setPayments([]); setLogs([]);
+        setCurrentUser(null); setAuthToken(null); setUsers([]); setEmployees([]); setPayments([]); setLogs([]); setWorkerLeaves([]);
         sessionStorage.removeItem('labor_current_user'); sessionStorage.removeItem('authToken');
       }
       if (response.status >= 500) setConnectionError('تعذر الاتصال بقاعدة البيانات. لم يتم حفظ التغييرات؛ حاول لاحقاً.');
@@ -109,6 +113,14 @@ export default function App() {
       setConnectionError('تعذر الاتصال بالخادم. تحقق من الاتصال ثم أعد المحاولة.');
       throw error;
     }
+  };
+
+  const refreshWorkerLeaves = async () => {
+    const leavesResponse = await authFetch('/api/worker-leaves');
+    if (!leavesResponse.ok) throw new Error('تعذر تحميل سجل الإجازات.');
+    setWorkerLeaves(await leavesResponse.json());
+    const workersResponse = await authFetch('/api/employees');
+    if (workersResponse.ok) setEmployees(await workersResponse.json());
   };
 
   const fetchDbStatus = async () => {
@@ -305,6 +317,9 @@ export default function App() {
           setPayments(data);
         }
 
+        const leavesRes = await authFetch('/api/worker-leaves');
+        if (leavesRes.ok) setWorkerLeaves(await leavesRes.json());
+
         // Fetch Branches
         const branchRes = await authFetch(`/api/branches?tenantId=${tid}`);
         if (branchRes.ok) {
@@ -413,6 +428,7 @@ export default function App() {
     if (confirm('هل أنت متأكد من رغبتك في تسجيل الخروج الآن؟')) {
       setCurrentUser(null);
       setAuthToken(null);
+      setWorkerLeaves([]); setEmployees([]); setPayments([]);
       sessionStorage.removeItem('labor_current_user');
       sessionStorage.removeItem('authToken');
       setActiveTab('dashboard');
@@ -629,7 +645,7 @@ export default function App() {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, targetTenantId: tid })
     });
     if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(data.error || 'لم يتم مسح البيانات.'); }
-    setEmployees([]); setPayments([]); setBranches([]); setSelectedStatementEmp(null); setWipeOpen(false);
+    setEmployees([]); setPayments([]); setBranches([]); setWorkerLeaves([]); setSelectedStatementEmp(null); setWipeOpen(false);
     const logsResponse = await authFetch(`/api/logs?tenantId=${encodeURIComponent(tid)}`);
     if (logsResponse.ok) setLogs(await logsResponse.json());
     toastNotice('تم مسح بيانات مساحة العمل. بقيت حسابات المستخدمين وإعدادات الشركة.');
@@ -968,7 +984,9 @@ export default function App() {
       return (paid - due) < 0;
     }).length;
 
-    return expiryCount + debtCount;
+    const leaveCount=active.filter(employee=>{ const status=stayStatus(employee,workerLeaves); return status.known&&!status.abroad&&(status.eligible||status.daysRemaining<=90); }).length;
+    const overdueReturns=workerLeaves.filter(leave=>!leave.cancelled&&!leave.actualReturnDate&&leave.expectedReturnDate<saudiToday()).length;
+    return expiryCount + debtCount + leaveCount + overdueReturns;
   };
 
   const todayStr = new Date().toISOString().slice(0, 10);
@@ -1093,6 +1111,7 @@ export default function App() {
               {activeTab === 'alerts' && 'الإنذارات العاجلة والإقامات المنتهية'}
               {activeTab === 'payments' && 'المدفوعات والتحصيلات'}
               {activeTab === 'general_ledger' && 'دفتر الصندوق والبنك'}
+              {activeTab === 'worker_leaves' && 'الإجازات والخروج والعودة'}
               {activeTab === 'shop_accounts' && 'حسابات المحلات والفروع'}
               {activeTab === 'dev_panel' && 'إدارة النظام'}
               {activeTab === 'spaces' && 'الشركات والاشتراكات'}
@@ -1294,6 +1313,8 @@ export default function App() {
               {/* Tab: Employees Ledger List */}
               {activeTab === 'employees' && (
                 <EmployeeListView 
+                  workerLeaves={workerLeaves}
+                  onOpenWorkerLeave={employee => { setLeaveWorker(employee.iqamaNo); setSelectedStatementEmp(null); setActiveTab('worker_leaves'); }}
                   employees={employees}
                   payments={payments}
                   pricing={pricingSettings}
@@ -1313,6 +1334,7 @@ export default function App() {
               {/* Tab: Critical Alerts warnings */}
               {activeTab === 'alerts' && (
                 <AlertsListView 
+                  workerLeaves={workerLeaves}
                   employees={employees}
                   payments={payments}
                   pricing={pricingSettings}
@@ -1335,6 +1357,7 @@ export default function App() {
                 <MonthlyFinanceView payments={payments} />
               )}
 
+              {activeTab === 'worker_leaves' && <WorkerLeaveView employees={employees} leaves={workerLeaves} currentUser={currentUser} initialIqama={leaveWorker} onReload={refreshWorkerLeaves} />}
               {activeTab === 'shop_accounts' && (currentUser.role !== 'viewer' || companySettings.allowLedgerForUsers) && <ShopAccountsView branches={branches} currentUser={currentUser} companyName={companySettings.name} logoBase64={companySettings.logoBase64} onManageBranches={() => setActiveTab('settings')} />}
 
               {/* Tab: General Ledger Statement (Receipts and Expenses Ledger) */}
