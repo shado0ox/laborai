@@ -3,7 +3,11 @@ import type { HijriPeriod } from './accounting';
 
 const saudiDateFormatter=new Intl.DateTimeFormat('en-CA', { timeZone:'Asia/Riyadh', year:'numeric',month:'2-digit',day:'2-digit' });
 const hijriMonthFormatter=new Intl.DateTimeFormat('en-u-ca-islamic-umalqura-nu-latn',{timeZone:'UTC',year:'numeric',month:'numeric'});
-export const saudiToday = () => saudiDateFormatter.format(new Date());
+export const saudiToday = () => {
+  const parts=saudiDateFormatter.formatToParts(new Date());
+  const part=(type:string)=>parts.find(value=>value.type===type)?.value || '';
+  return `${part('year')}-${part('month')}-${part('day')}`;
+};
 export function validISODate(value: string): boolean {
   if(!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const date = new Date(value+'T12:00:00Z');
