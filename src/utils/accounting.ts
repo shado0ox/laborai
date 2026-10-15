@@ -40,9 +40,29 @@ export function employeeDues(employee: Employee, pricing: PricingSettings, payme
 export function employeeCredits(employee: Employee, payments: Payment[]): number {
   return payments.filter(payment => payment.iqamaNo === employee.iqamaNo && isEmployeeCredit(payment)).reduce((total, payment) => total + payment.amount, 0);
 }
-export function lastPaidKafala(payments: Payment[]): string {
-  const paid = payments.filter(payment => isCashReceipt(payment) && (payment.category === 'kafala' || payment.type?.includes('كفالة')));
-  const periods = paid.map(payment => ({ payment, month: payment.kafalaPeriod?.toMonth || hijriMonthNumber(payment.hijriMonth), year: payment.kafalaPeriod?.toYear || Number(payment.hijriYear) })).filter(item => item.month >= 1 && item.month <= 12 && item.year >= 1300 && item.year <= 1700).sort((a, b) => b.year * 12 + b.month - (a.year * 12 + a.month));
+export function lastPaidKafala(payments: Payment[], employee?: Employee, pricing?: PricingSettings): string {
+  const own = employee ? payments.filter(payment => payment.iqamaNo === employee.iqamaNo) : payments;
+  const paid = own.filter(payment => isCashReceipt(payment) && (payment.category === 'kafala' || payment.type?.includes('كفالة')));
+  const periods = paid.map(payment => ({ month: payment.kafalaPeriod?.toMonth || hijriMonthNumber(payment.hijriMonth), year: payment.kafalaPeriod?.toYear || Number(payment.hijriYear) })).filter(item => item.month >= 1 && item.month <= 12 && item.year >= 1300 && item.year <= 1700);
+  if (employee && pricing) {
+    const cents = (amount: number) => Math.round(Number(amount || 0) * 100);
+    const debts = own.filter(isDebt);
+    // Legacy debt entries are already included in the employee's stored opening fields.
+    let charged = Math.max(0, cents(employeeDues(employee, pricing, own)) - debts.reduce((sum,payment)=>sum+cents(payment.amount),0));
+    let collected = 0;
+    const assessed: {month:number;year:number}[] = [];
+    const events = own.filter(payment=>isDebt(payment) || isCashReceipt(payment));
+    for (const date of [...new Set(events.map(payment=>payment.date))].sort()) {
+      for (const payment of events.filter(payment=>payment.date===date)) {
+        if (isDebt(payment)) { charged += cents(payment.amount); const end = kafalaDebtEnd(payment); if(end) assessed.push(end); }
+        else collected += cents(payment.amount);
+      }
+      // Full cash coverage settles every assessed debt, even if the receipt was entered under Other.
+      // Non-cash discounts/settlements never count as collection. Later unpaid debts retain prior coverage.
+      if (charged > 0 && collected > 0 && collected >= charged) periods.push(...assessed);
+    }
+  }
+  periods.sort((a,b)=>b.year*12+b.month-(a.year*12+a.month));
   if (periods.length) return `${HIJRI_MONTH_NAMES[periods[0].month - 1]} ${periods[0].year}`;
   return paid.sort((a, b) => b.date.localeCompare(a.date))[0]?.date || 'لم يُسجل سداد';
 }
@@ -98,22 +118,30 @@ export function cashbookSummary(transactions: CashTransaction[], from = '', to =
   return { opening:openingCents/100, rows, received, paid, net:net(period)/100, ending:running/100, sources };
 }
 
-export function lastCalculatedKafala(payments: Payment[]): string {
+function kafalaDebtEnd(payment: Payment): {month:number;year:number} | undefined {
+  if (!isDebt(payment) || !(payment.category==='kafala' || payment.type?.includes('كفالة'))) return;
+  if (payment.kafalaPeriod && validHijriPeriod(payment.kafalaPeriod)) return {month:payment.kafalaPeriod.toMonth,year:payment.kafalaPeriod.toYear};
   const normalize = (value: string) => value.replace(/[أإآ]/g,'ا').replace(/ى/g,'ي').replace(/[\u064b-\u065f]/g,'').replace(/[٠-٩]/g,digit=>String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)));
   const aliases = HIJRI_MONTH_NAMES.map((name,index)=>({name:normalize(name),month:index+1}));
   aliases.push({name:'ربيع الثاني',month:4},{name:'ربيع ثاني',month:4},{name:'ربيع اخر',month:4},{name:'جمادي الثانيه',month:6},{name:'جمادي الثانية',month:6});
   const candidates: {month:number;year:number}[] = [];
-  for (const payment of payments.filter(payment=>isDebt(payment) && (payment.category==='kafala' || payment.type?.includes('كفالة')))) {
-    if (payment.kafalaPeriod && validHijriPeriod(payment.kafalaPeriod)) {
-      candidates.push({month:payment.kafalaPeriod.toMonth,year:payment.kafalaPeriod.toYear}); continue;
-    }
-    // Legacy start metadata is not an end date. Only accept a written, explicit endpoint.
-    const text = normalize(`${payment.type || ''} ${payment.notes || ''}`);
-    for (const alias of aliases) {
-      const expression = new RegExp(`(?:الي|الى|حتي|حتى)\\s*(?:شهر\\s*)?${alias.name}\\s*(?:(?:عام|سنة)\\s*)?(1[3-6][0-9]{2}|1700)(?![0-9])`,'g');
-      for (const match of text.matchAll(expression)) candidates.push({month:alias.month,year:Number(match[1])});
+  const text = normalize(`${payment.type || ''} ${payment.notes || ''}`);
+  const contextYear = Number(normalize(payment.hijriYear || ''));
+  for (const alias of aliases) {
+    const expression = new RegExp(`(?:الي|الى|حتي|حتى)\\s*(?:شهر\\s*)?${alias.name}\\s*(?:(?:عام|سنة)\\s*)?(1[3-6][0-9]{2}|1700|[0-9]{2})(?![0-9])`,'g');
+    for (const match of text.matchAll(expression)) {
+      let year=Number(match[1]);
+      if(match[1].length===2) {
+        if(!Number.isInteger(contextYear) || contextYear<1300 || contextYear>1700) continue;
+        year=Math.floor(contextYear/100)*100+year;
+      }
+      if(year>=1300 && year<=1700) candidates.push({month:alias.month,year});
     }
   }
-  candidates.sort((a,b)=>b.year*12+b.month-(a.year*12+a.month));
+  return candidates.sort((a,b)=>b.year*12+b.month-(a.year*12+a.month))[0];
+}
+
+export function lastCalculatedKafala(payments: Payment[]): string {
+  const candidates = payments.map(kafalaDebtEnd).filter((period): period is {month:number;year:number} => !!period).sort((a,b)=>b.year*12+b.month-(a.year*12+a.month));
   return candidates.length ? `${HIJRI_MONTH_NAMES[candidates[0].month-1]} ${candidates[0].year}` : 'لم تُحدد فترة كفالة محسوبة';
 }

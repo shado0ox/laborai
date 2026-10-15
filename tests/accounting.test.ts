@@ -89,3 +89,25 @@ test('last calculated kafala uses debt endpoint and explicit legacy notes, never
   assert.equal(lastCalculatedKafala([{...legacy,notes:'من شوال إلى ربيع الآخر',hijriYear:'1448'}]),'لم تُحدد فترة كفالة محسوبة');
   assert.equal(lastCalculatedKafala([{...legacy,notes:'من شوال ١٤٤٧ إلى ربيع الآخر ١٤٤٨'}]),'ربيع الآخر 1448');
 });
+
+test('Other full-balance cash receipt covers assessed legacy kafala, including shorthand end year', () => {
+  const worker={...employee,iqamaBalance:7100,kafalaCount:6,otherDebt:0};
+  const records=[payment({id:'iq',type:'قيد مديونية: إقامة',transactionKind:'debt',amount:7100,date:'2026-10-04'}),payment({id:'kf',type:'قيد مديونية: كفالة',transactionKind:'debt',amount:1500,date:'2026-10-04',hijriMonth:'ذو القعدة',hijriYear:'1448',notes:'كفاله من ذي القعده 47 الي ربيع ثاني 48'}),payment({id:'full',type:'دفعة جزئية',category:'other',amount:8600,date:'2026-10-15'})];
+  assert.equal(lastCalculatedKafala(records),'ربيع الآخر 1448');
+  assert.equal(lastPaidKafala(records,worker,pricing),'ربيع الآخر 1448');
+  assert.equal(lastPaidKafala(records.map(row=>row.id==='full'?{...row,amount:8500}:row),worker,pricing),'لم يُسجل سداد');
+  assert.equal(lastPaidKafala(records.filter(row=>row.id!=='full'),worker,pricing),'لم يُسجل سداد');
+  assert.equal(lastPaidKafala(records.map(row=>row.id==='full'?{...row,transactionKind:'discount' as const}:row),worker,pricing),'لم يُسجل سداد');
+  assert.equal(lastCalculatedKafala(records.map(row=>({...row,hijriYear:undefined}))),'لم تُحدد فترة كفالة محسوبة');
+});
+
+test('general cash coverage survives later unpaid assessments and ignores noncash clearing and foreign workers', () => {
+  const worker={...employee,iqamaBalance:0,kafalaCount:0,otherDebt:0};
+  const debt=payment({id:'d',date:'2026-01-01',transactionKind:'debt',balanceIncluded:false,amount:250,kafalaPeriod:{fromMonth:1,fromYear:1448,toMonth:1,toYear:1448}});
+  const cash=payment({id:'c',date:'2026-01-02',category:'other',type:'سداد المستحق',amount:250});
+  const later=payment({...debt,id:'later',date:'2026-02-01',kafalaPeriod:{fromMonth:2,fromYear:1448,toMonth:2,toYear:1448}});
+  assert.equal(lastPaidKafala([later,cash,debt],worker,pricing),'محرم 1448');
+  assert.equal(lastPaidKafala([debt,{...cash,amount:200},payment({transactionKind:'discount',amount:50,date:'2026-01-02'})],worker,pricing),'لم يُسجل سداد');
+  assert.equal(lastPaidKafala([debt,{...cash,iqamaNo:'another'}],worker,pricing),'لم يُسجل سداد');
+  assert.equal(lastPaidKafala([later,{...cash,amount:500},debt],worker,pricing),'صفر 1448');
+});
