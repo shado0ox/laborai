@@ -1,4 +1,4 @@
-import { tripHijriMonths, chargeableKafalaMonths } from '../src/utils/workerLeave.ts';
+import { addHijriMonths, tripHijriMonths, chargeableKafalaMonths } from '../src/utils/workerLeave.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -184,8 +184,12 @@ test('PostgreSQL-backed ownership, authentication and persistence', { timeout: 9
     await api(`/api/employees/${iqama}/saudi-entry`,'POST',{date:'2020-02-30'},adminA,400);
     await api(`/api/employees/${iqama}/saudi-entry`,'POST',{date:'2020-01-01'},adminA);
     assert.equal((await api('/api/employees','GET',undefined,adminA)).find(e=>e.iqamaNo===iqama).saudiEntryDate,'2020-01-01');
-    const months=tripHijriMonths('2022-01-01','2022-03-01');
-    const leave={id:'eligible-trip',iqamaNo:iqama,departureDate:'2022-01-01',expectedReturnDate:'2022-03-01',actualReturnDate:'2022-03-01',policy:'eligible',exemptMonths:[months[1]]};
+    const due=addHijriMonths('2020-01-01',24);
+    assert.ok(due<'2022-01-01');
+    const months=tripHijriMonths(due,'2022-03-01');
+    const leave={id:'eligible-trip',iqamaNo:iqama,departureDate:due,expectedReturnDate:'2022-03-01',actualReturnDate:'2022-03-01',policy:'eligible',exemptMonths:[months[1]]};
+    const before=new Date(Date.parse(due+'T12:00:00Z')-86400000).toISOString().slice(0,10);
+    await api('/api/worker-leaves','POST',{...leave,departureDate:before},adminA,400);
     await api('/api/worker-leaves','POST',leave,branch.token,403);
     const retries=await Promise.all([1,2].map(()=>fetch(base+'/api/worker-leaves',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+adminA},body:JSON.stringify(leave)})));
     assert.deepEqual(retries.map(response=>response.status).sort(),[200,201]);

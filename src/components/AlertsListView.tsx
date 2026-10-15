@@ -1,4 +1,4 @@
-import { stayStatus, saudiToday } from '../utils/workerLeave';
+import { formatLeaveDate, stayStatus, saudiToday } from '../utils/workerLeave';
 import { employeeDues } from '../utils/accounting';
 import { isEmployeeCredit } from '../utils/paymentKind';
 import React from 'react';
@@ -53,7 +53,7 @@ export default function AlertsListView({
   return (
     <div className="space-y-6">
       
-      <div className="accounting-panel space-y-3"><h3 className="font-bold">تنبيهات الإجازات وإكمال السنتين</h3><p className="text-sm text-slate-600">الاستحقاق من آخر عودة أو الدخول الأساسي. قرب الاستحقاق لا يمنح إعفاءً تلقائيًا.</p>{activeEmployees.map(employee=>({employee,status:stayStatus(employee,workerLeaves)})).filter(({status})=>status.known&&!status.abroad&&(status.eligible||status.daysRemaining<=90)).map(({employee,status})=><p key={employee.iqamaNo} className="text-sm border-b py-2"><strong>{employee.name}</strong> · {status.months} شهرًا داخل السعودية · موعد السنتين {status.due} · {status.eligible?'أكمل السنتين':`باقي ${status.daysRemaining} يومًا`}</p>)}{workerLeaves.filter(l=>!l.cancelled&&!l.actualReturnDate&&l.expectedReturnDate<saudiToday()).map(l=><p key={l.id} className="text-sm text-amber-800">تجاوز موعد العودة المتوقع للعامل {employees.find(e=>e.iqamaNo===l.iqamaNo)?.name || l.iqamaNo}: {l.expectedReturnDate}. سجّل العودة الفعلية عند وصوله.</p>)}</div>
+      <div className="accounting-panel space-y-3"><h3 className="font-bold">تنبيهات الإجازات وإكمال السنتين</h3><p className="text-sm text-slate-600">الاستحقاق من آخر عودة أو الدخول الأساسي. قرب الاستحقاق لا يمنح إعفاءً تلقائيًا.</p>{activeEmployees.map(employee=>({employee,status:stayStatus(employee,workerLeaves)})).filter(({status})=>status.known&&!status.abroad&&(status.eligible||status.daysRemaining<=90)).map(({employee,status})=><p key={employee.iqamaNo} className="text-sm border-b py-2"><strong>{employee.name}</strong> · {status.months} شهرًا داخل السعودية · موعد السنتين {formatLeaveDate(status.due)} · {status.eligible?'أكمل السنتين':`باقي ${status.daysRemaining} يومًا`}</p>)}{workerLeaves.filter(l=>!l.cancelled&&!l.actualReturnDate&&l.expectedReturnDate<saudiToday()).map(l=><p key={l.id} className="text-sm text-amber-800">تجاوز موعد العودة المتوقع للعامل {employees.find(e=>e.iqamaNo===l.iqamaNo)?.name || l.iqamaNo}: {formatLeaveDate(l.expectedReturnDate)}. سجّل العودة الفعلية عند وصوله.</p>)}</div>
       {/* Expiry alerts document list */}
       <div className="bg-white rounded-2xl border border-rose-200 overflow-hidden shadow-sm">
         

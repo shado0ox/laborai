@@ -1,4 +1,4 @@
-import { approvedExemptMonths, chargeableKafalaMonths, stayStatus } from '../utils/workerLeave';
+import { formatLeaveDate, approvedExemptMonths, chargeableKafalaMonths, stayStatus } from '../utils/workerLeave';
 import HijriPeriodFields from './HijriPeriodFields';
 import { HijriPeriod, hijriMonthNumber, hijriPeriodMonths, payableHijriMonths, validHijriPeriod, formatHijriPeriod } from '../utils/accounting';
 import { employeeDues } from '../utils/accounting';
@@ -841,7 +841,7 @@ export default function EmployeeListView({
                     <td className="px-2 py-1.5 text-center text-slate-400 font-mono text-[10px]">{index + 1}</td>
                     <td className="px-2 py-1.5 font-bold text-slate-900 text-right">
                       <div>{e.name}</div>
-                      {e.saudiEntryDate && <button className="block text-[10px] text-primary mt-1" onClick={() => onOpenWorkerLeave?.(e)}>{stayStatus(e, workerLeaves).abroad ? 'خارج السعودية' : `داخل السعودية: ${stayStatus(e,workerLeaves).months} شهر · موعد السنتين ${stayStatus(e,workerLeaves).due}`}</button>}
+                      {e.saudiEntryDate && <button className="block text-[10px] text-primary mt-1" onClick={() => onOpenWorkerLeave?.(e)}>{stayStatus(e, workerLeaves).abroad ? 'خارج السعودية' : `داخل السعودية: ${stayStatus(e,workerLeaves).months} شهر · موعد السنتين ${formatLeaveDate(stayStatus(e,workerLeaves).due)}`}</button>}
                       {e.kafalaStartMonth && (
                         <div className="text-[9px] text-slate-400 font-semibold mt-0.5">
                           بداية الكفالة: {e.kafalaStartMonth} {e.kafalaStartYear}

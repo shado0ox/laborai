@@ -1,24 +1,40 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { addCalendarMonths, approvedExemptMonths, chargeableKafalaMonths, stayStatus, tripHijriMonths, validISODate } from '../src/utils/workerLeave.ts';
+import { addHijriMonths, hijriToISO, hijriParts, hijriMonthLength, formatLeaveDate, approvedExemptMonths, chargeableKafalaMonths, stayStatus, tripHijriMonths, validISODate } from '../src/utils/workerLeave.ts';
 import type { WorkerLeave } from '../src/types.ts';
 const worker={iqamaNo:'1',saudiEntryDate:'2024-01-15'};
 const leave:WorkerLeave={id:'l',iqamaNo:'1',departureDate:'2026-01-15',expectedReturnDate:'2026-03-15',policy:'eligible',exemptMonths:[],cancelled:false};
-test('stay eligibility reaches exactly 24 Gregorian months, with safe month-end and leap dates',()=>{
-  assert.equal(stayStatus(worker,[],'2026-01-14').eligible,false);
-  assert.equal(stayStatus(worker,[],'2026-01-15').eligible,true);
-  assert.equal(stayStatus(worker,[],'2025-10-15').months,21);
-  assert.equal(stayStatus(worker,[],'2025-10-15').due,'2026-01-15');
-  assert.equal(addCalendarMonths('2024-02-29',24),'2026-02-28');
-  assert.equal(addCalendarMonths('2025-01-31',1),'2025-02-28');
+test('stay eligibility reaches exactly 24 Umm al-Qura months, before two Gregorian years',()=>{
+  const start=hijriToISO(1445,7,3),due=hijriToISO(1447,7,3),w={iqamaNo:'1',saudiEntryDate:start};
+  const dayBefore=new Date(Date.parse(due+'T12:00:00Z')-86400000).toISOString().slice(0,10);
+  assert.equal(stayStatus(w,[],dayBefore).eligible,false);
+  assert.equal(stayStatus(w,[],due).eligible,true);
+  assert.equal(stayStatus(w,[],due).months,24);
+  assert.equal(stayStatus(w,[],hijriToISO(1447,4,3)).months,21);
+  assert.equal(stayStatus(w,[],due).due,due);
+  assert.ok(due<'2026-01-15');
   assert.equal(validISODate('2026-02-30'),false);
   assert.equal(stayStatus({iqamaNo:'1'},[],'2026-01-01').known,false);
 });
+test('Hijri conversion round-trips Umm al-Qura days, year rollovers and clamps short months',()=>{
+  for(let year=1440;year<=1450;year++)for(let month=1;month<=12;month++) {
+    const length=hijriMonthLength(year,month);
+    assert.ok(length===29||length===30);
+    for(const day of [1,length]) assert.deepEqual(hijriParts(hijriToISO(year,month,day)),{year,month,day});
+    if(length===30) {
+      const next=addHijriMonths(hijriToISO(year,month,30),1),parts=hijriParts(next);
+      assert.equal(parts.day,Math.min(30,hijriMonthLength(parts.year,parts.month)));
+    }
+  }
+  assert.equal(formatLeaveDate(hijriToISO(1447,1,1)),'1447/01/01 هـ');
+  assert.equal(addHijriMonths(hijriToISO(1446,12,1),1),hijriToISO(1447,1,1));
+  assert.throws(()=>hijriToISO(1447,1,31));
+});
 test('travel freezes inside-Saudi duration and actual return starts the next cycle, not expected return',()=>{
   assert.equal(stayStatus(worker,[leave],'2026-04-01').abroad,true);
-  assert.equal(stayStatus(worker,[leave],'2026-04-01').months,24);
+  assert.equal(stayStatus(worker,[leave],'2026-04-01').months,stayStatus(worker,[],leave.departureDate).months);
   const returned={...leave,actualReturnDate:'2026-03-20'};
-  assert.equal(stayStatus(worker,[returned],'2026-04-01').due,'2028-03-20');
+  assert.equal(stayStatus(worker,[returned],'2026-04-01').due,addHijriMonths('2026-03-20',24));
   assert.equal(stayStatus(worker,[returned],'2026-04-01').months,0);
   assert.equal(stayStatus(worker,[{...returned,cancelled:true}],'2026-04-01').start,worker.saudiEntryDate);
   assert.equal(stayStatus(worker,[{...returned,iqamaNo:'another'}],'2026-04-01').start,worker.saudiEntryDate);
