@@ -1,4 +1,5 @@
 export interface Employee {
+  saudiEntryDate?: string;
   iqamaNo: string;
   name: string;
   employeeId?: string; // رقم تعريف الموظف
@@ -19,6 +20,7 @@ export interface Employee {
 }
 
 export interface Payment {
+  kafalaExemptMonths?: string[];
   category?: 'kafala' | 'iqama' | 'insurance' | 'other';
   balanceIncluded?: boolean;
   kafalaPeriod?: import('./utils/accounting').HijriPeriod;
@@ -122,4 +124,10 @@ export interface ShopEntry {
   amount: number; category: string; description: string; reference?: string;
   responsible?: string; notes?: string; paidByCompany: boolean;
   cashAccount: 'cash' | 'bank'; createdAt?: string;
+}
+
+export interface WorkerLeave {
+  id: string; iqamaNo: string; departureDate: string; expectedReturnDate: string; actualReturnDate?: string;
+  policy: 'normal'|'eligible'|'exception'; exemptMonths: string[]; exceptionReason?: string;
+  cancelled: boolean; createdAt?: string; approvedBy?: string;
 }

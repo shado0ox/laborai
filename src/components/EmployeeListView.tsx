@@ -1,3 +1,4 @@
+import { approvedExemptMonths, chargeableKafalaMonths, stayStatus } from '../utils/workerLeave';
 import HijriPeriodFields from './HijriPeriodFields';
 import { HijriPeriod, hijriMonthNumber, hijriPeriodMonths, payableHijriMonths, validHijriPeriod, formatHijriPeriod } from '../utils/accounting';
 import { employeeDues } from '../utils/accounting';
@@ -6,7 +7,7 @@ import EmployeeDiscountDialog from './EmployeeDiscountDialog';
 import { getPaymentKind } from '../utils/paymentKind';
 import { isEmployeeCredit } from '../utils/paymentKind';
 import React, { useState, useEffect } from 'react';
-import { Employee, Payment, PricingSettings, UserProfile } from '../types';
+import { Employee, WorkerLeave, Payment, PricingSettings, UserProfile } from '../types';
 import { g2h, g2hObj, h2g } from '../utils/hijri';
 import { 
   Plus, Search, Sliders, Trash2, ShieldAlert, CheckCircle2,
@@ -20,6 +21,8 @@ const AR_HIJRI_MONTHS = [
 ];
 
 interface EmployeeListViewProps {
+  workerLeaves?: WorkerLeave[];
+  onOpenWorkerLeave?: (employee: Employee) => void;
   employees: Employee[];
   payments: Payment[];
   pricing: PricingSettings;
@@ -36,6 +39,7 @@ interface EmployeeListViewProps {
 }
 
 export default function EmployeeListView({
+  workerLeaves = [], onOpenWorkerLeave,
   employees,
   payments,
   pricing,
@@ -216,7 +220,9 @@ export default function EmployeeListView({
     toMonth: hijriMonthNumber(debtKafalaToM), toYear: Number(debtKafalaToY),
     ...(hasFreeMonths ? { freeFromMonth: hijriMonthNumber(debtFreeFromM), freeFromYear: Number(debtFreeFromY), freeToMonth: hijriMonthNumber(debtFreeToM), freeToYear: Number(debtFreeToY) } : {})
   };
+  const debtTravelFree = selectedEmp ? approvedExemptMonths(workerLeaves, selectedEmp.iqamaNo, debtPeriod) : [];
   const paymentPeriod: HijriPeriod = { fromMonth: Number(payHijriMonth), fromYear: Number(payHijriYear), toMonth: payEndMonth, toYear: payEndYear };
+  const paymentTravelFree = selectedEmp ? approvedExemptMonths(workerLeaves,selectedEmp.iqamaNo,paymentPeriod) : [];
   const changeDebtPeriod = (period: HijriPeriod) => {
     setDebtKafalaFromM(AR_HIJRI_MONTHS[period.fromMonth - 1]); setDebtKafalaFromY(String(period.fromYear));
     setDebtKafalaToM(AR_HIJRI_MONTHS[period.toMonth - 1]); setDebtKafalaToY(String(period.toYear));
@@ -229,20 +235,20 @@ export default function EmployeeListView({
   const changePaymentPeriod = (period: HijriPeriod) => {
     setPayHijriMonth(String(period.fromMonth)); setPayHijriYear(String(period.fromYear));
     setPayEndMonth(period.toMonth); setPayEndYear(period.toYear);
-    let months = payableHijriMonths(period);
-    if (pricing.ramadanFree && validHijriPeriod(period)) {
-      for (let index = period.fromYear * 12 + period.fromMonth - 1; index <= period.toYear * 12 + period.toMonth - 1; index++) {
-        if (index % 12 === 8) months--;
-      }
+    const exempt=new Set(selectedEmp ? approvedExemptMonths(workerLeaves,selectedEmp.iqamaNo,period) : []);
+    let months=0;
+    if(validHijriPeriod(period)) for(let index=period.fromYear*12+period.fromMonth-1;index<=period.toYear*12+period.toMonth-1;index++) {
+      const key=`${Math.floor(index/12)}-${String(index%12+1).padStart(2,'0')}`;
+      if(!exempt.has(key) && !(pricing.ramadanFree && index%12===8))months++;
     }
     setPayAmountKafala(Math.max(0, months) * pricing.kafala);
   };
   useEffect(() => {
     if (isDebtOpen && debtTab === 'kafala') {
-      const months = payableHijriMonths(debtPeriod);
+      const months = chargeableKafalaMonths(debtPeriod, debtTravelFree);
       setDebtKafalaMonths(months); setDebtKafalaAmount(months * pricing.kafala);
     }
-  }, [isDebtOpen, debtTab, debtKafalaFromM, debtKafalaFromY, debtKafalaToM, debtKafalaToY, hasFreeMonths, debtFreeFromM, debtFreeFromY, debtFreeToM, debtFreeToY, pricing.kafala]);
+  }, [isDebtOpen, debtTab, debtKafalaFromM, debtKafalaFromY, debtKafalaToM, debtKafalaToY, hasFreeMonths, debtFreeFromM, debtFreeFromY, debtFreeToM, debtFreeToY, pricing.kafala, workerLeaves, selectedEmp?.iqamaNo]);
   
   const [debtIqamaDur, setDebtIqamaDur] = useState<3 | 6 | 12>(12);
   const [debtIqamaCost, setDebtIqamaCost] = useState(pricing.iqama12);
@@ -487,7 +493,7 @@ export default function EmployeeListView({
     if (debtTab === 'kafala') {
       if (!validHijriPeriod(debtPeriod)) { alert('تحقق من سنوات الفترة وترتيب الشهور وفترة الإعفاء.'); return; }
       amount = Number(debtKafalaAmount);
-      description = `قيد مديونية: كفالة للفترة ${formatHijriPeriod(debtPeriod)} (${payableHijriMonths(debtPeriod)} شهر مستحق)`;
+      description = `قيد مديونية: كفالة للفترة ${formatHijriPeriod(debtPeriod)} (${chargeableKafalaMonths(debtPeriod, debtTravelFree)} شهر مستحق)`;
       if (hasFreeMonths) description += `؛ إعفاء ${AR_HIJRI_MONTHS[debtPeriod.freeFromMonth! - 1]} ${debtPeriod.freeFromYear} إلى ${AR_HIJRI_MONTHS[debtPeriod.freeToMonth! - 1]} ${debtPeriod.freeToYear}`;
       notes = debtKafalaNotes;
     } else if (debtTab === 'iqama') {
@@ -835,6 +841,7 @@ export default function EmployeeListView({
                     <td className="px-2 py-1.5 text-center text-slate-400 font-mono text-[10px]">{index + 1}</td>
                     <td className="px-2 py-1.5 font-bold text-slate-900 text-right">
                       <div>{e.name}</div>
+                      {e.saudiEntryDate && <button className="block text-[10px] text-primary mt-1" onClick={() => onOpenWorkerLeave?.(e)}>{stayStatus(e, workerLeaves).abroad ? 'خارج السعودية' : `داخل السعودية: ${stayStatus(e,workerLeaves).months} شهر · موعد السنتين ${stayStatus(e,workerLeaves).due}`}</button>}
                       {e.kafalaStartMonth && (
                         <div className="text-[9px] text-slate-400 font-semibold mt-0.5">
                           بداية الكفالة: {e.kafalaStartMonth} {e.kafalaStartYear}
@@ -871,6 +878,7 @@ export default function EmployeeListView({
                           { group: 'الحركات المالية', label: 'خصم بدون تحصيل', onSelect: () => setDiscountEmployee(e) },
                           { group: 'الحركات المالية', label: 'إثبات مديونية', onSelect: () => handleOpenDebt(e) },
                           { group: 'الحركات المالية', label: 'تعديل الرصيد الافتتاحي', onSelect: () => handleOpenOpening(e) },
+                          ...(onOpenWorkerLeave ? [{ group: 'بيانات العامل', label: 'الإجازات والخروج والعودة', onSelect: () => onOpenWorkerLeave(e) }] : []),
                           { group: 'بيانات العامل', label: 'تعديل البيانات', onSelect: () => handleOpenEditEmployee(e) },
                           { group: 'بيانات العامل', label: 'تحديث انتهاء الإقامة', onSelect: () => handleOpenExpiry(e) },
                           { group: 'بيانات العامل', label: 'أرشفة العامل', onSelect: () => handleOpenArchive(e) },
@@ -1066,7 +1074,7 @@ export default function EmployeeListView({
 
               {payTab === 'kafala' && (
                 <div className="space-y-3">
-                  <HijriPeriodFields value={paymentPeriod} onChange={changePaymentPeriod} />
+                  <HijriPeriodFields value={paymentPeriod} travelExemptMonths={paymentTravelFree} onChange={changePaymentPeriod} />
 
                   <div className="space-y-1">
                     <label htmlFor="kafala-paid-amount">المبلغ المدفوع (ريال) *</label>
@@ -1211,7 +1219,7 @@ export default function EmployeeListView({
 
               {debtTab === 'kafala' && (
                 <div className="space-y-4">
-                  <div className="bg-slate-50 p-3 rounded-lg"><HijriPeriodFields value={debtPeriod} onChange={changeDebtPeriod} allowFree /></div>
+                  <div className="bg-slate-50 p-3 rounded-lg"><HijriPeriodFields value={debtPeriod} travelExemptMonths={debtTravelFree} onChange={changeDebtPeriod} allowFree /></div>
 
                   {/* Calculations breakdown info card */}
                   <div className="p-3 bg-red-50/50 border border-red-100/50 rounded-xl space-y-1 text-[11px] text-slate-700">
@@ -1231,6 +1239,7 @@ export default function EmployeeListView({
                     </div>
                   </div>
 
+                  {debtTravelFree.length>0 && debtKafalaMonths===0 && <p className="text-sm text-emerald-800 bg-emerald-50 p-3 rounded-lg">هذه الفترة معفاة بالكامل بموجب سجل الإجازة؛ لا تحتاج إلى إثبات مديونية كفالة.</p>}
                   {/* Editable Amount */}
                   <div className="space-y-1">
                     <label htmlFor="kafala-debt-amount">المبلغ المستحق النهائي للتدوين (ريال) *</label>

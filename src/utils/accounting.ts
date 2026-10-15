@@ -43,7 +43,7 @@ export function employeeCredits(employee: Employee, payments: Payment[]): number
 export function lastPaidKafala(payments: Payment[], employee?: Employee, pricing?: PricingSettings): string {
   const own = employee ? payments.filter(payment => payment.iqamaNo === employee.iqamaNo) : payments;
   const paid = own.filter(payment => isCashReceipt(payment) && (payment.category === 'kafala' || payment.type?.includes('كفالة')));
-  const periods = paid.map(payment => ({ month: payment.kafalaPeriod?.toMonth || hijriMonthNumber(payment.hijriMonth), year: payment.kafalaPeriod?.toYear || Number(payment.hijriYear) })).filter(item => item.month >= 1 && item.month <= 12 && item.year >= 1300 && item.year <= 1700);
+  const periods = paid.map(payment => payment.kafalaPeriod ? collectionPeriodEnd(payment) : ({ month: hijriMonthNumber(payment.hijriMonth), year: Number(payment.hijriYear) })).filter((item): item is {month:number;year:number} => !!item).filter(item => item.month >= 1 && item.month <= 12 && item.year >= 1300 && item.year <= 1700);
   if (employee && pricing) {
     const cents = (amount: number) => Math.round(Number(amount || 0) * 100);
     const debts = own.filter(isDebt);
@@ -54,7 +54,7 @@ export function lastPaidKafala(payments: Payment[], employee?: Employee, pricing
     const events = own.filter(payment=>isDebt(payment) || isCashReceipt(payment));
     for (const date of [...new Set(events.map(payment=>payment.date))].sort()) {
       for (const payment of events.filter(payment=>payment.date===date)) {
-        if (isDebt(payment)) { charged += cents(payment.amount); const end = kafalaDebtEnd(payment); if(end) assessed.push(end); }
+        if (isDebt(payment)) { charged += cents(payment.amount); const end = payment.kafalaPeriod && (payment.category==='kafala' || payment.type?.includes('كفالة')) ? collectionPeriodEnd(payment) : kafalaDebtEnd(payment); if(end) assessed.push(end); }
         else collected += cents(payment.amount);
       }
       // Full cash coverage settles every assessed debt, even if the receipt was entered under Other.
@@ -116,6 +116,18 @@ export function cashbookSummary(transactions: CashTransaction[], from = '', to =
       paid: sourceRows.reduce((sum,row)=>sum+cents(row.payment),0)/100, net: net(sourceRows)/100 };
   });
   return { opening:openingCents/100, rows, received, paid, net:net(period)/100, ending:running/100, sources };
+}
+
+function collectionPeriodEnd(payment: Payment): {month:number;year:number} | undefined {
+  const period=payment.kafalaPeriod;
+  if(!period || !validHijriPeriod(period)) return;
+  const free=new Set(payment.kafalaExemptMonths || []);
+  const from=period.fromYear*12+period.fromMonth-1,to=period.toYear*12+period.toMonth-1;
+  for(let month=to;month>=from;month--) {
+    const key=`${Math.floor(month/12)}-${String(month%12+1).padStart(2,'0')}`;
+    const manual=period.freeFromMonth!==undefined && month>=period.freeFromYear!*12+period.freeFromMonth-1 && month<=period.freeToYear!*12+period.freeToMonth!-1;
+    if(!free.has(key)&&!manual)return {year:Math.floor(month/12),month:month%12+1};
+  }
 }
 
 function kafalaDebtEnd(payment: Payment): {month:number;year:number} | undefined {

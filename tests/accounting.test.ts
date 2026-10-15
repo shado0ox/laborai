@@ -111,3 +111,13 @@ test('general cash coverage survives later unpaid assessments and ignores noncas
   assert.equal(lastPaidKafala([debt,{...cash,iqamaNo:'another'}],worker,pricing),'لم يُسجل سداد');
   assert.equal(lastPaidKafala([later,{...cash,amount:500},debt],worker,pricing),'صفر 1448');
 });
+
+test('last paid kafala skips approved leave months at the end of an assessed period',()=>{
+  const worker={...employee,iqamaBalance:0,kafalaCount:0,otherDebt:0};
+  const debt=payment({id:'leave-debt',date:'2026-01-01',transactionKind:'debt',balanceIncluded:false,amount:500,kafalaPeriod:{fromYear:1448,fromMonth:1,toYear:1448,toMonth:3},kafalaExemptMonths:['1448-03']});
+  const cash=payment({id:'paid',date:'2026-01-02',category:'other',type:'سداد المستحق',amount:500});
+  assert.equal(lastPaidKafala([debt,cash],worker,pricing),'صفر 1448');
+  assert.equal(lastCalculatedKafala([debt]),'ربيع الأول 1448');
+  const iqama=payment({...debt,id:'iqama-only',category:'iqama',type:'قيد مديونية: إقامة',kafalaPeriod:{fromYear:1448,fromMonth:5,toYear:1448,toMonth:8},kafalaExemptMonths:[]});
+  assert.equal(lastPaidKafala([debt,iqama,{...cash,amount:1000}],worker,pricing),'صفر 1448');
+});
